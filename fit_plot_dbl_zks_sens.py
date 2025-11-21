@@ -36,8 +36,8 @@ def extract_data_from_file(filename):
     with asdf.open(filename) as af:
         # Extract data and convert to native Python/NumPy types
         zkTable_asdf = af["zkTable"]
-        state_key = str(af["state_key"][0])  # Convert to string
-        unit_alpha = float(af["unit_alpha"])  # Convert to float
+        state_key = af["state_key"].copy()
+        unit_alpha = af["unit_alpha"].copy()
         
         # Convert zkTable to a fully loaded structure that doesn't depend on the file
         zkTable = {}
@@ -110,7 +110,13 @@ def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zer
     print(f"Number of pupil Zernikes: {n_zernikes}")
     
     # Prepare data for linear fit
-    x_values = np.array([unit_alpha * results["expids"][eid]["alpha"]
+    # if multiple DOFs are moving, we need to just use the dimensionless alpha
+    if isinstance(unit_alpha, float):
+        unit_alpha_multiplier = unit_alpha
+    else:
+        unit_alpha_multiplier = 1.
+
+    x_values = np.array([unit_alpha_multiplier * results["expids"][eid]["alpha"]
                         for eid in unique_expids])
     y_values = np.zeros((len(unique_expids), n_coefs, n_zernikes))
     
@@ -235,12 +241,13 @@ def combine_results_by_dof(all_results):
     
     for file_key, result in all_results.items():
         state_key = result["state_key"]
-        if state_key not in combined:
-            combined[state_key] = []
+        state_key_str = str(state_key)
+        if state_key_str not in combined:
+            combined[state_key_str] = []
         
         # Add file_key to the result for reference
         result["file_key"] = file_key
-        combined[state_key].append(result)
+        combined[state_key_str].append(result)
     
     return combined
 
@@ -1079,9 +1086,9 @@ def main():
 
         with asdf.open(filename) as af:
             state_key = af["state_key"]
-            state_key_str = f"{state_key[0]}"
-            if len(state_key) > 1:
-                state_key_str += f"+{len(state_key)-1}"
+            state_key_str = f"{state_key}"
+            # if len(state_key) > 1:
+            #     state_key_str += f"+{len(state_key)-1}"
         
         # Process the file
         results = process_sensitivity_file(filename, jmax=args.jmax, kmax=args.kmax)
