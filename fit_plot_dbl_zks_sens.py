@@ -7,6 +7,8 @@ from pathlib import Path
 import argparse
 import pickle
 import time
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.transforms as transforms
 
 def fit_focal_zernikes(x, y, zk_all, kmax, R_outer=np.deg2rad(1.75)):
     """Fit focal Zernike coefficients to pupil Zernike values."""
@@ -67,6 +69,7 @@ def process_exposure(exp_data, jmax, kmax):
     
     # Limit to the specified pupil Zernike indices
     zk_values = zk_values[:, :jmax+1]  # +1 because we want to include jmax
+    zk_sim_values = zk_sim_values[:, :jmax+1]  # +1 because we want to include jmax
     
     print(f"  thx shape: {thx.shape}, range: [{thx.min():.5f}, {thx.max():.5f}] rad")
     print(f"  thy shape: {thy.shape}, range: [{thy.min():.5f}, {thy.max():.5f}] rad")
@@ -84,34 +87,37 @@ def process_exposure(exp_data, jmax, kmax):
     
     # Fit focal Zernikes
     print(f"  Fitting focal Zernikes...")
-    coefs, resids = fit_focal_zernikes(thx, thy, zk_values, kmax)
+    data_coefs, data_resids = fit_focal_zernikes(thx, thy, zk_values, kmax)
+    sim_coefs, sim_resids = fit_focal_zernikes(thx, thy, zk_sim_values, kmax)
     
     return {
         "alpha": alpha,
-        "focal_zernike_coeffs": coefs,
-        "residuals": resids,
+        "focal_zernike_data_coeffs": data_coefs,
+        "focal_zernike_sim_coeffs": sim_coefs,
+        "data_residuals": data_resids,
+        "sim_residuals": sim_resids
     }
 
-def perform_linear_fits(results, unique_expids, unit_alpha):
+def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zernike_data_coeffs"):
     """Perform linear fits across exposures for each Zernike term."""
     # Get the first exposure's data to determine dimensions
     first_exp = results["expids"][unique_expids[0]]
-    n_coefs = first_exp["focal_zernike_coeffs"].shape[0]
-    n_zernikes = first_exp["focal_zernike_coeffs"].shape[1]
+    n_coefs = first_exp[coeff_key].shape[0]
+    n_zernikes = first_exp[coeff_key].shape[1]
     
-    print(f"\nPerforming linear fits across {len(unique_expids)} exposures")
+    print(f"\nPerforming linear fits across {len(unique_expids)} exposures for {coeff_key}")
     print(f"Number of focal Zernike coefficients: {n_coefs}")
     print(f"Number of pupil Zernikes: {n_zernikes}")
     
     # Prepare data for linear fit
-    x_values = np.array([unit_alpha * results["expids"][eid]["alpha"] 
+    x_values = np.array([unit_alpha * results["expids"][eid]["alpha"]
                         for eid in unique_expids])
     y_values = np.zeros((len(unique_expids), n_coefs, n_zernikes))
     
     print(f"x_values shape: {x_values.shape}, range: [{min(x_values)}, {max(x_values)}]")
     
     for i, eid in enumerate(unique_expids):
-        y_values[i] = results["expids"][eid]["focal_zernike_coeffs"]
+        y_values[i] = results["expids"][eid][coeff_key]
     
     print(f"y_values shape: {y_values.shape}")
     
@@ -123,13 +129,11 @@ def perform_linear_fits(results, unique_expids, unit_alpha):
     print("Performing linear fits for each combination...")
     for k in range(n_coefs):
         for j in range(n_zernikes):
-            # Fit y = mx + b
             # Fit y = mx + b using np.polyfit with cov=True to get error estimates
             coef, cov = np.polyfit(x_values, y_values[:, k, j], 1, cov=True)
 
-            print(f"coef shape: {coef.shape}, cov shape: {cov.shape}")
+            # print(f"coef shape: {coef.shape}, cov shape: {cov.shape}")
 
-            # Store the coefficients
             linear_fits[k, j] = coef  # [m, b]
             
             # Calculate standard errors from the covariance matrix
@@ -147,7 +151,7 @@ def perform_linear_fits(results, unique_expids, unit_alpha):
             ss_residual = np.sum((y_actual - y_pred)**2)
             r_squared[k, j] = 1 - (ss_residual / ss_total) if ss_total != 0 else 0
 
-            print(f"  Fit for F{k}/Z{j}: m={coef[0]:.6f}, b={coef[1]:.6f}, R²={r_squared[k, j]:.4f}")
+            # print(f"  Fit for F{k}/Z{j}: m={coef[0]:.6f}, b={coef[1]:.6f}, R²={r_squared[k, j]:.4f}")
     
     print(f"linear_fits shape: {linear_fits.shape}")
     print(f"fit_errors shape: {fit_errors.shape}")
@@ -165,7 +169,6 @@ def process_sensitivity_file(filename, jmax, kmax):
     # Extract data from file
     zkTable, state_key, unit_alpha = extract_data_from_file(filename)
     
-    # Store state_key and unit_alpha
     results["state_key"] = state_key
     results["unit_alpha"] = unit_alpha
     
@@ -194,12 +197,29 @@ def process_sensitivity_file(filename, jmax, kmax):
     linear_fits, fit_errors, r_squared, x_values, y_values = perform_linear_fits(
         results, unique_expids, unit_alpha
     )
+    # Perform linear fits for real data
+    data_linear_fits, data_fit_errors, data_r_squared, x_values, data_y_values = perform_linear_fits(
+        results, unique_expids, unit_alpha, coeff_key="focal_zernike_data_coeffs"
+    )
     
-    results["linear_fits"] = linear_fits
-    results["fit_errors"] = fit_errors
-    results["r_squared"] = r_squared
+    # Perform linear fits for simulation data
+    sim_linear_fits, sim_fit_errors, sim_r_squared, _, sim_y_values = perform_linear_fits(
+        results, unique_expids, unit_alpha, coeff_key="focal_zernike_sim_coeffs"
+    )
+    
+    # Store the results
     results["x_values"] = x_values
-    results["y_values"] = y_values
+
+    results["data_linear_fits"] = data_linear_fits
+    results["data_fit_errors"] = data_fit_errors
+    results["data_r_squared"] = data_r_squared
+    results["data_y_values"] = data_y_values
+    
+    results["sim_linear_fits"] = sim_linear_fits
+    results["sim_fit_errors"] = sim_fit_errors
+    results["sim_r_squared"] = sim_r_squared
+    results["sim_y_values"] = sim_y_values
+    
     
     elapsed_time = time.time() - start_time
     print(f"\nFile processing completed in {elapsed_time:.2f} seconds")
@@ -359,12 +379,14 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
     """
     Create a comprehensive multi-panel figure with all pupil-focal Zernike combinations.
     Each COLUMN represents one pupil Zernike, each ROW represents one focal Zernike.
+    Includes both real data and simulation results.
     """
     state_key = results["state_key"]
-    n_coefs = results["linear_fits"].shape[0]  # Focal Zernike terms (rows)
-    n_zernikes = results["linear_fits"].shape[1]  # Pupil Zernike terms (columns)
+    n_coefs = results["data_linear_fits"].shape[0]  # Focal Zernike terms (rows)
+    n_zernikes = results["data_linear_fits"].shape[1]  # Pupil Zernike terms (columns)
     x_values = results["x_values"]
-    y_values = results["y_values"]
+    data_y_values = results["data_y_values"]
+    sim_y_values = results["sim_y_values"]
     
     print(f"Creating concatenated sensitivity plot with {n_coefs-1} rows and {n_zernikes-4} columns")
     
@@ -376,8 +398,8 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
                              constrained_layout=True)  # Better than tight_layout for gridded plots
     
     # Get global min/max for y-axes
-    vmin = np.nanmin(y_values)
-    vmax = np.nanmax(y_values)
+    vmin = min(np.nanmin(data_y_values), np.nanmin(sim_y_values))
+    vmax = max(np.nanmax(data_y_values), np.nanmax(sim_y_values))
     y_range = vmax - vmin
     vmin -= 0.1 * y_range
     vmax += 0.1 * y_range
@@ -398,19 +420,31 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
             jj = j-4
             ax = axes[ii, jj]
             
-            # Plot data points
-            ax.scatter(x_values, y_values[:, i, j], color='blue', s=15)
+            # Plot real data points
+            ax.scatter(x_values, data_y_values[:, i, j],
+                       color='blue', s=15, alpha=0.7, label='Data')
             
-            # Plot linear fit
-            m, b = results["linear_fits"][i, j]
-            m_err, b_err = results["fit_errors"][i, j]
-            r2 = results["r_squared"][i, j]
+            # Plot simulation data points
+            ax.scatter(x_values, sim_y_values[:, i, j],
+                       color='green', s=15, alpha=0.7, marker='x', label='Sim')
+            
+            # Plot real data linear fit
+            m, b = results["data_linear_fits"][i, j]
+            m_err, b_err = results["data_fit_errors"][i, j]
+            r2 = results["data_r_squared"][i, j]
             x_fit = np.array([min(x_values), max(x_values)])
             y_fit = m * x_fit + b
-            ax.plot(x_fit, y_fit, 'r-', linewidth=1.5)
+            ax.plot(x_fit, y_fit, 'b-', linewidth=1.5, label=f'Data fit')
+            
+            # Plot simulation linear fit
+            sim_m, sim_b = results["sim_linear_fits"][i, j]
+            sim_r2 = results["sim_r_squared"][i, j]
+            sim_y_fit = sim_m * x_fit + sim_b
+            ax.plot(x_fit, sim_y_fit, 'g-', linewidth=1.5, label=f'Sim fit')
             
             # Add fit parameters as text (simple format)
-            ax.text(0.05, 0.95, f"m={m:.3f}±{m_err:.3f}, R²={r2:.2f}", 
+            ax.text(0.05, 0.95, 
+                    f"Data: m={m:.3f}±{m_err:.3f}, R²={r2:.2f}\nSim: m={sim_m:.3f}, R²={sim_r2:.2f}", 
                     transform=ax.transAxes, fontsize=6,
                     verticalalignment='top', bbox=dict(boxstyle='round', 
                                                        facecolor='white', 
@@ -434,6 +468,14 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
                 ax.set_yticklabels([])
             if i != n_coefs - 1:  # Not the bottom row
                 ax.set_xticklabels([])
+
+    # Add a legend to the first subplot only
+    if n_coefs > 1 and n_zernikes > 4:
+        handles = [
+            plt.Line2D([0], [0], marker='o', color='blue', label='Data', markersize=4, linestyle='none'),
+            plt.Line2D([0], [0], marker='x', color='green', label='Sim', markersize=4, linestyle='none'),
+        ]
+        axes[0, 0].legend(handles=handles, fontsize=6, loc='lower right')
     
     # Add overall title and axis labels
     fig.suptitle(f"Sensitivity Analysis for {state_key} ({date})", fontsize=12)
@@ -445,7 +487,7 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
     fig.supylabel("Zernike coefficient [um]", fontsize=10)
     
     # Save the plot
-    plot_file = output_dir / f"{state_key}_concatenated_sensitivity_{date}.png"
+    plot_file = output_dir / f"{state_key}_concatenated_sensitivity_+sim_{date}.png"
     print(f"Saving concatenated sensitivity plot to {plot_file}")
     plt.savefig(plot_file, dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -453,41 +495,49 @@ def create_concatenated_sensitivity_plot(results, output_dir, date):
 def create_summary_plot(results, output_dir, date):
     """Create a summary plot of sensitivity coefficients."""
     state_key = results["state_key"]
-    n_coefs = results["linear_fits"].shape[0]
-    n_zernikes = results["linear_fits"].shape[1]
+    n_coefs = results["data_linear_fits"].shape[0]
+    n_zernikes = results["data_linear_fits"].shape[1]
 
     plasma_cmap = plt.cm.plasma
     colors = [plasma_cmap(j/n_zernikes) for j in range(n_zernikes)]
     markers = ['o', 's', '^', 'd', 'v', 'p', 'h', '*']
     
     print("Creating summary plot of sensitivity coefficients")
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(6,6))
     for j in range(4, n_zernikes):
         pupil_zk_name = f"Z{j}"
-        slopes = results["linear_fits"][:, j, 0]  # m values
-        slope_errors = results["fit_errors"][:, j, 0]  # m error values
+        data_slopes = results["data_linear_fits"][:, j, 0]  # m values
+        data_slope_errors = results["data_fit_errors"][:, j, 0]  # m error values
+        sim_slopes = results["sim_linear_fits"][:, j, 0]  # m values
         
-        # Plot with error bars
+        # Plot real data with error bars
         ax.errorbar(
-            range(0, n_coefs),
-            slopes,
-            yerr=slope_errors,
+            np.arange(1, n_coefs) + (j/2 - 4 + 0.5)*0.2,
+            data_slopes[1:],
+            yerr=data_slope_errors[1:],
             marker=markers[j%len(markers)],
-            color=colors[j],
-            label=pupil_zk_name,
+            # color=colors[j],
+            color='k',
+            label=f"{pupil_zk_name} data",
             capsize=3,
             elinewidth=1.5,
+            ls='',
+            alpha=0.8
         )
-        # ax.plot(
-        #     range(n_coefs),
-        #     slopes,
-        #     marker=markers[j%len(markers)],
-        #     color=colors[j],
-        #     label=pupil_zk_name
-        # )
+        
+        # Plot simulation data as points
+        ax.scatter(
+            np.arange(1, n_coefs) + (j/2 - 4 + 0.5)*0.2,
+            sim_slopes[1:],
+            marker='x',  # Use 'x' to distinguish from data points
+            # color=colors[j],
+            color='b',
+            s=30,
+            # label=f"{pupil_zk_name} sim"
+        )
 
     # Set integer ticks on x-axis
-    x_ticks = np.arange(0, n_coefs)
+    x_ticks = np.arange(1, n_coefs)
     ax.set_xticks(x_ticks)
     ax.set_xticklabels([str(int(x)) for x in x_ticks])
     
@@ -496,25 +546,200 @@ def create_summary_plot(results, output_dir, date):
     ax.grid(True, which='major', axis='y')
 
     ax.set_xlabel("Focal Zernike Index")
-    ax.set_ylabel("Sensitivity (Slope)")
-    ax.set_title(f"Sensitivity of Focal Zernikes to {state_key} ({date})")
-    ax.legend(ncol=5)
-    plt.tight_layout()
+    ax.set_ylabel("Sensitivity")
+    ax.set_title(f"{state_key} ({date})")
 
     # Create a more readable legend
-    # if n_zernikes > 15:
-    #     # For many Zernikes, use a multi-column legend outside the plot
-    #     ax.legend(ncol=5, loc='upper center', bbox_to_anchor=(0.5, -0.15), fontsize='small')
-    #     plt.tight_layout(rect=[0, 0.1, 1, 0.98])  # Adjust to make room for the legend
-    # else:
-    #     # For fewer Zernikes, legend can fit on the side
-    #     ax.legend(ncol=1, loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
-    #     plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust to make room for the legend
+    unique_labels = []
+    handles = []
+    labels = []
+    
+    h, l = ax.get_legend_handles_labels()
+
+    # Keep only one instance of each Zernike (for both data and sim)
+    for i, label in enumerate(l):
+        zk = label.split(' ')[0]  # Extract Zernike name
+        if zk not in unique_labels:
+            unique_labels.append(zk)
+            handles.append(h[i])
+            labels.append(zk)
+    
+    # Add two more entries to explain the markers
+    handles.append(plt.Line2D([0], [0], color='gray', marker='o', linestyle='none'))
+    handles.append(plt.Line2D([0], [0], color='gray', marker='x', linestyle='none'))
+    labels.append('Data')
+    labels.append('Sim')
+
+    
+    ax.legend(handles, labels, ncol=1, loc='center left', bbox_to_anchor=(1., 0.5))
+    plt.tight_layout()  # Adjust to make room for the legend
     
     
-    summary_file = output_dir / f"{state_key}_sensitivity_summary_{date}.png"
+    summary_file = output_dir / f"{state_key}_sensitivity_summary_+sim_{date}.pdf"
     print(f"Saving summary plot to {summary_file}")
     plt.savefig(summary_file, dpi=150)
+    plt.close(fig)
+
+def create_combined_summary_plot(results_list, output_dir):
+    """
+    Create a summary plot of sensitivity coefficients for multiple datasets.
+    Plots both real data (with error bars) and simulation data (as points).
+    
+    Parameters:
+    -----------
+    results_list : list
+        List of result dictionaries, each from a different data set but same DOF
+    output_dir : Path
+        Directory to save the output plot
+    """
+    if not results_list:
+        return
+    
+    # Get DOF and file keys
+    state_key = results_list[0]["state_key"]
+    file_keys = [r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
+    
+    print(f"\nCreating combined summary plot for DOF: {state_key}")
+    print(f"  Combining data from {len(file_keys)} files: {file_keys}")
+    
+    # Determine dimensions from the first result
+    n_coefs = results_list[0]["data_linear_fits"].shape[0]
+    n_zernikes = results_list[0]["data_linear_fits"].shape[1]
+    
+    # Define markers for different Zernikes
+    markers = ['o', 's', '^', 'd', 'v', 'p', 'h', '*']
+    
+    # Get a color palette for the different datasets
+    dataset_colors = plt.cm.tab10.colors[:len(results_list)]
+    
+    print("Creating combined summary plot of sensitivity coefficients")
+    fig, ax = plt.subplots(figsize=(9,6))
+    
+    # Calculate stagger parameters
+    n_datasets = len(results_list)
+    n_active_zernikes = n_zernikes - 4  # We're using Zernikes from index 4 onward
+    
+    
+    total_width = 0.95 # Total width for all points at focal Zernike
+    # gap_width = 0.05 # gap between datasets for one focal Zernike
+    dataset_width = total_width / n_datasets
+    zk_width = dataset_width / n_active_zernikes # space b/w data points
+
+    # set up for plotting labels etc
+    trans = transforms.blended_transform_factory(
+    ax.transData, ax.transAxes)
+
+    for file_idx, results in enumerate(results_list):
+        # where does the first point in the dataset get plotted
+        dataset_base_offset = (zk_width-total_width)/2  + file_idx * zk_width
+        
+        for j in range(4, n_zernikes):
+            jj = j - 4
+            pupil_zk_name = f"Z{j}"
+
+            # Calculate offset for this pupil Zernike within the dataset
+            zernike_offset = jj * n_datasets * zk_width # interleaves datasets
+            total_offset = dataset_base_offset + zernike_offset
+            # Calculate x positions with offset
+            x_positions = np.arange(1, n_coefs) + total_offset
+ 
+            # Get slopes for data and simulation
+            data_slopes = results["data_linear_fits"][:, j, 0]  # m values
+            data_slope_errors = results["data_fit_errors"][:, j, 0]  # m error values
+            sim_slopes = results["sim_linear_fits"][:, j, 0]  # m values
+            
+            # Get the color for this dataset
+            color = dataset_colors[file_idx]
+            
+            # Create label for legend
+            label = f"{pupil_zk_name}" if file_idx == 0 else None
+            
+            # Plot real data with error bars
+            ax.errorbar(
+                x_positions,
+                data_slopes[1:],
+                yerr=data_slope_errors[1:],
+                marker=markers[j % len(markers)],
+                color=color,
+                label=label,
+                capsize=3,
+                elinewidth=1,
+                markersize=6,
+                ls='',
+                alpha=0.8
+            )
+            
+            # Plot simulation data as 'x' markers
+            ax.scatter(
+                x_positions,
+                sim_slopes[1:],
+                marker='x',
+                color='k',
+                s=25,
+                alpha=0.8
+            )
+
+            # add visual clarity
+            if (file_idx == 0):
+                for xpos in x_positions:
+                    # add j labeling
+                    ax.text(xpos + zk_width * (n_datasets - 1)/2, 0., j,
+                    transform=trans, horizontalalignment='center',
+                    verticalalignment='bottom'
+                    )
+                    if j%2 == 0:
+                        # add shaded boxes grouping j Zernikes
+                        ax.axvspan(
+                            xpos - zk_width/2,
+                            xpos + n_datasets * zk_width - zk_width/2,
+                            color='k',
+                            alpha=0.1
+                        )
+
+    # divide zernikes
+    for dz in range(1, n_coefs):
+        ax.axvline(dz+0.5, lw=1., c='gray')
+    
+    # Set integer ticks on x-axis
+    ax.set_xlim(0.5, 3.5)
+    x_ticks = np.arange(1, n_coefs)
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels([str(int(x)) for x in x_ticks])
+    
+    # Add grid lines
+    ax.grid(True, axis='y', alpha=0.5)
+
+    # Add shaded boxes grouping j Zernikes
+    
+    
+    if "r" in state_key:
+        units = "deg"
+    else:
+        units = "um"
+    ax.set_xlabel("Focal Zernike Index", fontsize=12)
+    ax.set_ylabel(f"Sensitivity Coefficient [wavefront um / DOF {units}]", fontsize=12)
+    ax.set_title(f"{state_key}", fontsize=14)
+
+    
+    handles, labels = ax.get_legend_handles_labels()
+    for file_idx, file_key in enumerate(file_keys):
+        color = dataset_colors[file_idx]
+        handles.append(plt.Line2D([0], [0], color=color, marker='o', linestyle='-', markersize=5))
+        labels.append(file_key)
+    
+    # Sim marker meaning
+    handles.append(plt.Line2D([0], [0], color='k', marker='x', linestyle='none', markersize=5))
+    labels.append('Simulation')
+
+    leg = ax.legend(handles, labels, ncols=1, loc='center left',
+                    bbox_to_anchor=(1.02, 0.5), fontsize=10)    
+    plt.tight_layout()
+    
+    # Save the plot
+    summary_file = output_dir / f"{state_key}_combined_sensitivity_summary_+sim.pdf"
+    print(f"  Saving combined summary plot to {summary_file}")
+    plt.savefig(summary_file, dpi=150)
+    
     plt.close(fig)
 
 def create_combined_concatenated_plot(results_list, output_dir):
@@ -543,13 +768,14 @@ def create_combined_concatenated_plot(results_list, output_dir):
     print(f"  Combining data from {len(file_keys)} files: {file_keys}")
     
     # Determine dimensions from the first result
-    n_coefs = results_list[0]["linear_fits"].shape[0]  # Focal Zernike terms (rows)
-    n_zernikes = results_list[0]["linear_fits"].shape[1]  # Pupil Zernike terms (columns)
+    n_coefs = results_list[0]["data_linear_fits"].shape[0] # Focal Zernike terms (rows)
+    n_zernikes = results_list[0]["data_linear_fits"].shape[1] # Pupil Zernike terms (columns)
+ 
     
     # Create subplots with better default spacing
     fig, axes = plt.subplots(n_coefs-1, n_zernikes-4, 
-                             figsize=(n_zernikes*1.2, n_coefs*0.8),  # Transposed dimensions
-                             constrained_layout=True)  # Better than tight_layout for gridded plots
+                             figsize=(n_zernikes*1.2, n_coefs*0.8),
+                             constrained_layout=True)
     
     # Get a color palette for the different files
     dataset_colors = plt.cm.tab10.colors[:len(results_list)]
@@ -566,9 +792,8 @@ def create_combined_concatenated_plot(results_list, output_dir):
     vmin = np.inf
     vmax = -np.inf
     for results in results_list:
-        vmin = min(vmin, np.nanmin(results["y_values"]))
-        vmax = max(vmax, np.nanmax(results["y_values"]))
-    
+        vmin = min(vmin, np.nanmin(results["data_y_values"]), np.nanmin(results["sim_y_values"]))
+        vmax = max(vmax, np.nanmax(results["data_y_values"]), np.nanmax(results["sim_y_values"]))
     y_range = vmax - vmin
     vmin -= 0.1 * y_range
     vmax += 0.1 * y_range
@@ -585,38 +810,61 @@ def create_combined_concatenated_plot(results_list, output_dir):
                 color = dataset_colors[file_idx]
                 file_key = results.get("file_key", f"Dataset {file_idx}")
                 x_values = results["x_values"]
-                y_values = results["y_values"]
+                data_y_values = results["data_y_values"]
+                sim_y_values = results["sim_y_values"]
 
-                # Only add label to the first subplot (will be used for legend)
-                # label = file_key if ii == 0 and jj == 0 else None
                 # Plot data points (small and transparent)
-                ax.scatter(x_values, y_values[:, i, j], color=color, 
-                           s=10, alpha=0.5, label=None)
+                ax.scatter(x_values, data_y_values[:, i, j], color=color, 
+                           s=10, alpha=0.5, marker='o')
                 
-                # Plot linear fit
-                m, b = results["linear_fits"][i, j]
-                m_err, b_err = results["fit_errors"][i, j]
-                r2 = results["r_squared"][i, j]
+                # Plot simulation points (small and transparent)
+                ax.scatter(x_values, sim_y_values[:, i, j], color=color, 
+                           s=10, alpha=0.5, marker='x')
+                
+                # Plot data linear fit
+                m, b = results["data_linear_fits"][i, j]
+                r2 = results["data_r_squared"][i, j]
+                
+                # Plot simulation linear fit
+                sim_m, sim_b = results["sim_linear_fits"][i, j]
+                sim_r2 = results["sim_r_squared"][i, j]
                 
                 x_fit = np.array([min(x_values), max(x_values)])
+                
+                # Data fit
                 y_fit = m * x_fit + b
-                ax.plot(x_fit, y_fit, '-', color=color, linewidth=1.5,
-                        label=f"m={m:.1e}±{m_err:.1e}, R²={r2:.2f}")
-                ax.legend(fontsize=4)
+                ax.plot(x_fit, y_fit, '-', color=color, linewidth=1.5)
                 
-                # # Add fit parameters as text on first row
-                # if ii == 0:
-                #     text_y = 0.95 - file_idx * 0.15  # Stagger text vertically
-                #     text_color = color
-                # else:
-                #     continue  # Only add text on first row to avoid clutter
+                # Sim fit (dashed line)
+                sim_y_fit = sim_m * x_fit + sim_b
+                ax.plot(x_fit, sim_y_fit, '--', color=color, linewidth=1.5)
                 
-                # ax.text(0.05, text_y, f"m={m:.3f}", 
-                #         transform=ax.transAxes, fontsize=6, color=text_color,
-                #         verticalalignment='top', bbox=dict(boxstyle='round', 
-                #                                           facecolor='white', 
-                #                                           alpha=0.5))
+                # Add legend only to the first subplot
+                if ii == 0 and jj == 0 and file_idx == 0:
+                    handles = [
+                        plt.Line2D([0], [0], marker='o', color='gray', label='Data',
+                                   markersize=4, linestyle='none'),
+                        plt.Line2D([0], [0], marker='x', color='gray', label='Sim',
+                                   markersize=4, linestyle='none'),
+                        plt.Line2D([0], [0], linestyle='-', color='gray', label='Data fit', markersize=0),
+                        plt.Line2D([0], [0], linestyle='--', color='gray', label='Sim fit', markersize=0)
+                    ]
+                    ax.legend(handles=handles, fontsize=6, loc='lower right')
             
+            # Add text showing slopes
+            slope_text = ""
+            for file_idx, results in enumerate(results_list):
+                file_key = results.get("file_key", f"Dataset {file_idx}")
+                m = results["data_linear_fits"][i, j][0]
+                sim_m = results["sim_linear_fits"][i, j][0]
+                slope_text += f"{file_key}:\nData m={m:.1e}\nSim m={sim_m:.1e}\n\n"
+            
+            ax.text(0.05, 0.95, slope_text, 
+                    transform=ax.transAxes, fontsize=6,
+                    verticalalignment='top', bbox=dict(boxstyle='round', 
+                                                      facecolor='white', 
+                                                      alpha=0.7))
+     
             # Set y-limits to be consistent
             ax.set_ylim(vmin, vmax)
             
@@ -663,9 +911,119 @@ def create_combined_concatenated_plot(results_list, output_dir):
     fig.supylabel("Zernike coefficient [um]", fontsize=8)
     
     # Save the plot
-    plot_file = output_dir / f"{state_key}_combined_concatenated_sensitivity.png"
+    plot_file = output_dir / f"{state_key}_combined_concatenated_sensitivity_+sim.png"
     print(f"  Saving combined concatenated plot to {plot_file}")
     plt.savefig(plot_file, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+def create_matrix_visualization(results, output_dir, date=None):
+    """
+    Create a condensed matrix visualization of sensitivity data for a single dataset.
+    Displays four matrices: data slopes, simulation slopes, data errors, and normalized residuals.
+    
+    Parameters:
+    -----------
+    results : dict
+        Results dictionary for a single dataset
+    output_dir : Path
+        Directory to save the output plot
+    date : str, optional
+        Date string to include in the title and filename
+    """
+    state_key = results["state_key"]
+    print(f"\nCreating matrix visualization for: {state_key}")
+    
+    # Extract matrices
+    data_slopes = results["data_linear_fits"][1:, 4:, 0]  # m values (first index in the last dimension)
+    sim_slopes = results["sim_linear_fits"][1:, 4:, 0]    # m values
+    data_errors = results["data_fit_errors"][1:, 4:, 0]   # m error values
+    
+    # Calculate normalized residuals
+    # Use np.divide with 'where' to avoid division by zero
+    norm_residuals = np.divide(
+        data_slopes - sim_slopes, 
+        data_errors, 
+        out=np.zeros_like(data_slopes), 
+        where=data_errors!=0
+    )
+
+    n_coefs, n_zernikes = data_slopes.shape
+    
+    # Create figure
+    fig, axes = plt.subplots(4,1, figsize=(5, 8))
+    
+    # Common params for imshow
+    common_params = {
+        'aspect': 'auto',
+        'origin': 'upper',
+        'interpolation': 'nearest'
+    }
+    
+    # Set titles and specific parameters for each matrix
+    matrices = [
+        (data_slopes, "Data sensitivity"),
+        (sim_slopes, "Design sensitivity"),
+        (data_errors, "Data errors (standard deviation)"),
+        (norm_residuals, "(Data-Design)/Error")
+    ]
+
+    # Create colorbars with appropriate scales for each matrix
+    for i, (matrix, title) in enumerate(matrices):
+        ax = axes[i]
+        
+        # For errors matrix, use a different colormap and scale
+        if i == 2:  # Data errors
+            vmin = 0
+            vmax = np.max(matrix)
+            cmap = 'viridis'
+        else:  # Other matrices
+            vmax = np.max(np.abs(matrix))
+            vmin = -vmax
+            cmap = 'RdBu_r'
+        
+        # Plot the matrix
+        im = ax.imshow(matrix, vmin=vmin, vmax=vmax, cmap=cmap, **common_params)
+        
+        # Add colorbar
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        cbar = plt.colorbar(im, cax=cax)
+        
+        # Set title
+        ax.set_title(title)
+        
+        # Set labels
+        ax.set_ylabel("k")
+        ax.set_xlabel("j")
+        
+        # Set ticks
+        ax.set_yticks(np.arange(n_coefs))
+        ax.set_xticks(np.arange(n_zernikes))
+        ax.set_yticklabels(np.arange(1, n_coefs+1))
+        ax.set_xticklabels(np.arange(4, n_zernikes+4))
+        
+        # Set grid lines between cells (at 0.5, 1.5, 2.5, etc.)
+        ax.set_yticks(np.arange(-0.5, n_coefs), minor=True)
+        ax.set_xticks(np.arange(-0.5, n_zernikes), minor=True)
+        ax.tick_params(which='minor', length=0)
+        ax.grid(which="minor", color="w", linestyle='-', linewidth=1.0, alpha=0.7)
+        ax.grid(which="major", visible=False)
+    
+    title_text = f"{state_key}"
+    if date:
+        title_text += f" ({date})"
+    fig.suptitle(title_text, fontsize=12)
+    plt.tight_layout()
+    
+    # Save the plot
+    filename = f"{state_key}_matrix_visualization"
+    if date:
+        filename += f"_{date}"
+    
+    matrix_file = output_dir / f"{filename}.png"
+    pdf_file = output_dir / f"{filename}.pdf"
+    plt.savefig(pdf_file, dpi=150)
+    
     plt.close(fig)
 
 def plot_results(results, output_dir, date):
@@ -689,6 +1047,9 @@ def plot_results(results, output_dir, date):
     
     # Create the concatenated sensitivity plot
     create_concatenated_sensitivity_plot(results, output_dir, date)
+
+    # Create matrix visualization plot
+    create_matrix_visualization(results, output_dir, date)
     
     print("Plotting completed")
 
@@ -698,7 +1059,6 @@ def main():
     parser.add_argument("--output", "-o", default="sens_results", help="Output directory for plots")
     parser.add_argument("--kmax", type=int, default=3, help="Maximum focal Zernike coefficient to fit")
     parser.add_argument("--jmax", type=int, default=28, help="Maximum pupil Zernike coefficient to fit")
-    parser.add_argument("--combine", action="store_true", help="Combine plots for the same DOF")
     args = parser.parse_args()
     
     print(f"\n=== Sensitivity Analysis Data Extraction ===")
@@ -706,9 +1066,8 @@ def main():
     print(f"Output directory: {args.output}")
     print(f"Maximum focal Zernike coefficient (kmax): {args.kmax}")
     print(f"Maximum pupil Zernike coefficient (jmax): {args.jmax}")
-    print(f"Combine same DOF: {args.combine}")
     
-    output_dir = Path(args.output + f"_max-k{args.kmax}-j{args.jmax}")
+    output_dir = Path(args.output + "+sim" + f"_max-k{args.kmax}-j{args.jmax}")
     output_dir.mkdir(exist_ok=True, parents=True)
     print(f"Output directory created: {output_dir}")
     
@@ -722,7 +1081,7 @@ def main():
             state_key = af["state_key"]
             state_key_str = f"{state_key[0]}"
             if len(state_key) > 1:
-                state_key_str += "++"
+                state_key_str += f"+{len(state_key)-1}"
         
         # Process the file
         results = process_sensitivity_file(filename, jmax=args.jmax, kmax=args.kmax)
@@ -735,28 +1094,25 @@ def main():
         # Generate plots
         subdir = state_key_str + "_" + file_key
         plot_dir = output_dir / subdir
-        plot_results(results, plot_dir, date)
+        # plot_results(results, plot_dir, date)
         
         file_elapsed = time.time() - file_start_time
         print(f"File {i+1}/{len(args.files)} completed in {file_elapsed:.2f} seconds")
 
-    # Create combined plots by DOF if requested
-    if args.combine and len(args.files) > 1:
-        print("\n=== Creating combined plots for same DOFs ===")
-        combined_results = combine_results_by_dof(all_results)
-        
-        combined_dir = output_dir / f"DOF_combined"
-        combined_dir.mkdir(exist_ok=True)
-        
-        for dof, results_list in combined_results.items():
-            if len(results_list) > 1:
-                print(f"\nCombining {len(results_list)} files for DOF: {dof}")
-                # create_combined_sensitivity_plots(results_list, combined_dir)
-                create_combined_concatenated_plot(results_list, combined_dir)
-                # create_combined_summary_plot(results_list, combined_dir)
-            else:
-                print(f"Only one file for DOF {dof}, skipping combination")
+    # Create combined plots by DOF (still handles one dataset)
+    print("\n=== Creating combined plots for same DOFs ===")
+    combined_results = combine_results_by_dof(all_results)
     
+    combined_dir = output_dir / f"DOF_combined"
+    combined_dir.mkdir(exist_ok=True)
+    
+    for dof, results_list in combined_results.items():
+        print(f"\nCombining {len(results_list)} files for DOF: {dof}")
+
+        # these both handle when there's only one dataset
+        create_combined_summary_plot(results_list, combined_dir)
+        # create_combined_concatenated_plot(results_list, combined_dir)
+
     # Save all results to a pickle file
     results_file = output_dir / f"all_results.pkl"
     print(f"\nSaving all results to {results_file}")
