@@ -1,3 +1,5 @@
+import glob
+import re
 import numpy as np
 import asdf
 import matplotlib.pyplot as plt
@@ -7,9 +9,20 @@ from pathlib import Path
 import argparse
 import pickle
 import time
+import textwrap
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.transforms as transforms
 
+def _wrap_text(text, max_line_length):
+    """Wraps text into multiple lines at word boundaries."""
+    return '\n'.join(textwrap.wrap(text, width=max_line_length))
+
+def _pad_state_key(state_key_str):
+    """Adds a leading zero to single digit bending modes to help with sorting."""
+    padded_str = re.sub(r'B(\d+)', lambda match: f'B{int(match.group(1)):02d}', state_key_str)
+    print(state_key_str, padded_str)
+    return padded_str
+    
 def fit_focal_zernikes(x, y, zk_all, kmax, R_outer=np.deg2rad(1.75)):
     """Fit focal Zernike coefficients to pupil Zernike values."""
     print(f"  Fitting focal Zernikes with x shape: {x.shape}, y shape: {y.shape}, zk_all shape: {zk_all.shape}")
@@ -99,7 +112,7 @@ def process_exposure(exp_data, jmax, kmax):
     }
 
 def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zernike_data_coeffs"):
-    """Perform linear fits across exposures for each Zernike term."""
+    """Perform linear fits across FAM exposures for each Zernike term."""
     # Get the first exposure's data to determine dimensions
     first_exp = results["expids"][unique_expids[0]]
     n_coefs = first_exp[coeff_key].shape[0]
@@ -111,10 +124,12 @@ def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zer
     
     # Prepare data for linear fit
     # if multiple DOFs are moving, we need to just use the dimensionless alpha
-    if isinstance(unit_alpha, float):
-        unit_alpha_multiplier = unit_alpha
+    if len(unit_alpha) == 1:
+        unit_alpha_multiplier = np.abs(unit_alpha[0])
     else:
         unit_alpha_multiplier = 1.
+
+    print(f"ALPHA INFO: u_a: {unit_alpha}, u_a.dtype: {unit_alpha.dtype}, type(u_a): {type(unit_alpha)}, u_a multiplier: {unit_alpha_multiplier}")
 
     x_values = np.array([unit_alpha_multiplier * results["expids"][eid]["alpha"]
                         for eid in unique_expids])
@@ -231,6 +246,48 @@ def process_sensitivity_file(filename, jmax, kmax):
     print(f"\nFile processing completed in {elapsed_time:.2f} seconds")
     
     return results
+
+def process_giant_donuts(state_key_str):
+    """Process all giant donut sensitivity analysis files for the given state key. Doesn't work for multi-DOF runs yet."""
+    print(f"Processing giant donut data for {state_key_str}.")
+    # convert to GD file name convention
+    if state_key_str == 'M2_z':
+        state_key_str = 'm2_dz'
+    elif state_key_str == 'Cam_z':
+        state_key_str = 'cam_dz'
+    # glob all matching files and sort
+    gd_dir = "/sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/"
+    gd_files = glob.glob(gd_dir + f"hartmann_zernike_sensitivity*{state_key_str.lower()}.asdf")
+    gd_files.sort()
+
+    if len(gd_files) == 0:
+        print(f"No giant donut data found for {state_key_str}.")
+        return None
+    else:
+        print(f"Processing giant donut data for {state_key_str} ({len(gd_files)} datasets).")
+        gd_results_list = []
+        for gd_file in gd_files:
+            ff = asdf.open(gd_file)
+            # get ds
+            sweep = ff['ds'][~np.isclose(ff['ds'], np.zeros_like(ff['ds']), atol=1e-2)]
+            print(sweep)
+            if len(sweep) > 1:
+                multiplier = 1. # multiple things moving - don't divide out by the sweep
+            else:
+                multiplier = sweep
+            # sweep = ff['ds'][np.nonzero(ff['ds'])[0]]
+            # get sensitivities
+            ms = ff['measured_sensitivity'] / 1000 / multiplier # nm to um/um (or just um for v/z modes)
+            ps = ff['predicted_sensitivity'] / 1000 / multiplier # nm to um/um
+    
+            gd_results_dict = {}
+            gd_results_dict['reason'] = ff['reason']
+            gd_results_dict['ds'] = sweep
+            gd_results_dict['measured_sensitivity'] = ms
+            gd_results_dict['predicted_sensitivity'] = ps
+            gd_results_list.append(gd_results_dict)
+    
+        return gd_results_list
 
 def combine_results_by_dof(all_results):
     """
@@ -587,7 +644,7 @@ def create_summary_plot(results, output_dir, date):
     plt.savefig(summary_file, dpi=150)
     plt.close(fig)
 
-def create_combined_summary_plot(results_list, output_dir):
+def create_combined_summary_plot(results_list, output_dir, gd_results_list=None):
     """
     Create a summary plot of sensitivity coefficients for multiple datasets.
     Plots both real data (with error bars) and simulation data (as points).
@@ -604,6 +661,7 @@ def create_combined_summary_plot(results_list, output_dir):
     
     # Get DOF and file keys
     state_key = results_list[0]["state_key"]
+    unit_alpha = results_list[0]["unit_alpha"]
     file_keys = [r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
     
     print(f"\nCreating combined summary plot for DOF: {state_key}")
@@ -618,16 +676,18 @@ def create_combined_summary_plot(results_list, output_dir):
     
     # Get a color palette for the different datasets
     dataset_colors = plt.cm.tab10.colors[:len(results_list)]
+    gd_colors = ['r', 'b', 'g']
+    # for legend, will get just the colors that get used
+    all_colors = []
     
     print("Creating combined summary plot of sensitivity coefficients")
-    fig, ax = plt.subplots(figsize=(9,6))
+    fig, ax = plt.subplots(figsize=(11,6))
     
     # Calculate stagger parameters
     n_datasets = len(results_list)
     n_active_zernikes = n_zernikes - 4  # We're using Zernikes from index 4 onward
     
-    
-    total_width = 0.95 # Total width for all points at focal Zernike
+    total_width = 1. # Total width for all points at focal Zernike
     # gap_width = 0.05 # gap between datasets for one focal Zernike
     dataset_width = total_width / n_datasets
     zk_width = dataset_width / n_active_zernikes # space b/w data points
@@ -639,7 +699,11 @@ def create_combined_summary_plot(results_list, output_dir):
     for file_idx, results in enumerate(results_list):
         # where does the first point in the dataset get plotted
         dataset_base_offset = (zk_width-total_width)/2  + file_idx * zk_width
-        
+
+        # Get the color for this dataset
+        color = dataset_colors[file_idx]
+        all_colors.append(color)
+
         for j in range(4, n_zernikes):
             jj = j - 4
             pupil_zk_name = f"Z{j}"
@@ -655,9 +719,6 @@ def create_combined_summary_plot(results_list, output_dir):
             data_slope_errors = results["data_fit_errors"][:, j, 0]  # m error values
             sim_slopes = results["sim_linear_fits"][:, j, 0]  # m values
             
-            # Get the color for this dataset
-            color = dataset_colors[file_idx]
-            
             # Create label for legend
             label = f"{pupil_zk_name}" if file_idx == 0 else None
             
@@ -666,9 +727,10 @@ def create_combined_summary_plot(results_list, output_dir):
                 x_positions,
                 data_slopes[1:],
                 yerr=data_slope_errors[1:],
-                marker=markers[j % len(markers)],
+                # marker=markers[j % len(markers)],
+                marker='o',
                 color=color,
-                label=label,
+                # label=label,
                 capsize=3,
                 elinewidth=1,
                 markersize=6,
@@ -681,7 +743,7 @@ def create_combined_summary_plot(results_list, output_dir):
                 x_positions,
                 sim_slopes[1:],
                 marker='x',
-                color='k',
+                color=color,
                 s=25,
                 alpha=0.8
             )
@@ -703,47 +765,117 @@ def create_combined_summary_plot(results_list, output_dir):
                             alpha=0.1
                         )
 
-    # divide zernikes
+    # add giant donut sensitivities
+    if gd_results_list is not None:
+        # Might be different number of datasets -- recalculate stagger parameters
+        n_datasets = len(gd_results_list)
+        n_active_zernikes = n_zernikes - 4  # We're using Zernikes from index 4 onward
+        total_width = 1. # Total width for all points at focal Zernike
+        # gap_width = 0.05 # gap between datasets for one focal Zernike
+        dataset_width = total_width / n_datasets
+        zk_width = dataset_width / n_active_zernikes # space b/w data points
+        for file_idx, gd_results in enumerate(gd_results_list):
+
+            file_keys.append(f"GD {gd_results['reason'][:8]}")
+            # Get the color for this dataset
+            color = gd_colors[file_idx]
+            all_colors.append(color)
+
+            # where does the first point in the dataset get plotted
+            dataset_base_offset = (zk_width-total_width)/2  + file_idx * zk_width
+
+            for j in range(4, n_zernikes):
+                jj = j - 4
+                pupil_zk_name = f"Z{j}"
+
+                # Calculate offset for this pupil Zernike within the dataset
+                zernike_offset = jj * n_datasets * zk_width # interleaves datasets
+                total_offset = dataset_base_offset + zernike_offset
+                # Calculate x positions with offset
+                x_positions = np.arange(1, n_coefs) + total_offset
+
+                # Get slopes for data and simulation
+                data_gd = gd_results["measured_sensitivity"][:, j]
+                sim_gd = gd_results["predicted_sensitivity"][:, j]
+
+                # # Create label for legend
+                # label = f"{pupil_zk_name}" if file_idx == 0 else None
+
+                # Plot real data with error bars
+                ax.scatter(
+                    x_positions,
+                    data_gd[1:n_coefs],
+                    marker='^',
+                    color=color,
+                    s=25,
+                    alpha=0.8
+                )
+
+                # Plot real data with error bars
+                ax.scatter(
+                    x_positions,
+                    sim_gd[1:n_coefs],
+                    marker='x',
+                    color=color,
+                    s=25,
+                    alpha=0.8
+                )
+
+    # Add unit alpha info
+    ax.text(1.01, 0.98, "Step size [um or deg]:", transform=ax.transAxes)
+    for idx, sk in enumerate(state_key):
+        ua_list = []
+        for results in results_list:
+            ua_list.append(results["unit_alpha"][idx])
+        ax.text(1.02, 0.98 - (idx+1)*0.04,
+                f"{sk}: " + str([f"{ua:.5f}" for ua in ua_list]),
+                transform=ax.transAxes)
+    # divide focal zernikes
     for dz in range(1, n_coefs):
         ax.axvline(dz+0.5, lw=1., c='gray')
-    
+
     # Set integer ticks on x-axis
     ax.set_xlim(0.5, 3.5)
     x_ticks = np.arange(1, n_coefs)
     ax.set_xticks(x_ticks)
     ax.set_xticklabels([str(int(x)) for x in x_ticks])
-    
+
     # Add grid lines
     ax.grid(True, axis='y', alpha=0.5)
 
-    # Add shaded boxes grouping j Zernikes
-    
-    
-    if "r" in state_key:
+    if len(state_key) > 1:
+        units = "dimless"
+    elif "r" in state_key:
         units = "deg"
     else:
         units = "um"
     ax.set_xlabel("Focal Zernike Index", fontsize=12)
     ax.set_ylabel(f"Sensitivity Coefficient [wavefront um / DOF {units}]", fontsize=12)
-    ax.set_title(f"{state_key}", fontsize=14)
+    ax.set_title(_wrap_text(f"{state_key}", 80), fontsize=12)
 
-    
     handles, labels = ax.get_legend_handles_labels()
     for file_idx, file_key in enumerate(file_keys):
-        color = dataset_colors[file_idx]
-        handles.append(plt.Line2D([0], [0], color=color, marker='o', linestyle='-', markersize=5))
+        color = all_colors[file_idx]
+        marker = 'o'
+        if 'GD' in file_key:
+            marker = '^'
+        handles.append(plt.Line2D([0], [0], color=color, marker=marker, linestyle='none', markersize=5))
         labels.append(file_key)
     
     # Sim marker meaning
     handles.append(plt.Line2D([0], [0], color='k', marker='x', linestyle='none', markersize=5))
     labels.append('Simulation')
 
-    leg = ax.legend(handles, labels, ncols=1, loc='center left',
-                    bbox_to_anchor=(1.02, 0.5), fontsize=10)    
+    leg = ax.legend(handles, labels, ncols=1, loc='lower left',
+                    bbox_to_anchor=(1.01, 0.), fontsize=10)    
     plt.tight_layout()
     
     # Save the plot
-    summary_file = output_dir / f"{state_key}_combined_sensitivity_summary_+sim.pdf"
+    state_key_str = state_key
+    if len(state_key) == 1:
+        state_key_str = _pad_state_key(state_key[0])
+    gd_fn_str = "+gd" if gd_results_list is not None else ""
+    summary_file = output_dir / f"{state_key_str}_combined_sensitivity_summary_+sim{gd_fn_str}.pdf"
     print(f"  Saving combined summary plot to {summary_file}")
     plt.savefig(summary_file, dpi=150)
     
@@ -1086,7 +1218,10 @@ def main():
 
         with asdf.open(filename) as af:
             state_key = af["state_key"]
-            state_key_str = f"{state_key}"
+            if len(state_key) == 1:
+                state_key_str = f"{state_key[0]}"
+            else:
+                state_key_str = f"{state_key}"
             # if len(state_key) > 1:
             #     state_key_str += f"+{len(state_key)-1}"
         
@@ -1098,7 +1233,7 @@ def main():
         date = file_key[:8]
         all_results[file_key] = results
         
-        # Generate plots
+        # Generate plots - skipping 
         subdir = state_key_str + "_" + file_key
         plot_dir = output_dir / subdir
         # plot_results(results, plot_dir, date)
@@ -1112,12 +1247,19 @@ def main():
     
     combined_dir = output_dir / f"DOF_combined"
     combined_dir.mkdir(exist_ok=True)
+
+    # add giant donut data points
+    # if args.giant_donuts:
+    if True:
+        gd_results_list = process_giant_donuts(state_key_str)
+    else:
+        gd_results_list = None
     
     for dof, results_list in combined_results.items():
         print(f"\nCombining {len(results_list)} files for DOF: {dof}")
 
         # these both handle when there's only one dataset
-        create_combined_summary_plot(results_list, combined_dir)
+        create_combined_summary_plot(results_list, combined_dir, gd_results_list)
         # create_combined_concatenated_plot(results_list, combined_dir)
 
     # Save all results to a pickle file
