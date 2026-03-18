@@ -186,7 +186,7 @@ def process_sensitivity_file(filename, jmax, kmax):
     print(f"\n=== Processing {filename} ===")
     start_time = time.time()
     results = {}
-    
+
     # Extract data from file
     zkTable, state_key, unit_alpha = extract_data_from_file(filename)
     
@@ -241,53 +241,55 @@ def process_sensitivity_file(filename, jmax, kmax):
     results["sim_r_squared"] = sim_r_squared
     results["sim_y_values"] = sim_y_values
     
-    
     elapsed_time = time.time() - start_time
     print(f"\nFile processing completed in {elapsed_time:.2f} seconds")
     
     return results
 
-def process_giant_donuts(state_key_str):
+def process_giant_donuts(gd_files=None, state_key_str=None):
     """Process all giant donut sensitivity analysis files for the given state key. Doesn't work for multi-DOF runs yet."""
-    print(f"Processing giant donut data for {state_key_str}.")
-    # convert to GD file name convention
-    if state_key_str == 'M2_z':
-        state_key_str = 'm2_dz'
-    elif state_key_str == 'Cam_z':
-        state_key_str = 'cam_dz'
-    # glob all matching files and sort
-    gd_dir = "/sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/"
-    gd_files = glob.glob(gd_dir + f"hartmann_zernike_sensitivity*{state_key_str.lower()}.asdf")
-    gd_files.sort()
+    if gd_files is None:
+        print(f"Retrieving giant donut data for {state_key_str}.")
+        
+        # convert to GD file name convention
+        if state_key_str == 'M2_z':
+            state_key_str = 'm2_dz'
+        elif state_key_str == 'Cam_z':
+            state_key_str = 'cam_dz'
+        # glob all matching files and sort
+        gd_dir = "/sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/"
+        gd_files = glob.glob(gd_dir + f"hartmann_zernike_sensitivity*{state_key_str.lower()}.asdf")
+        
+        if len(gd_files) == 0:
+            print(f"No giant donut data found.")
+            return None
+        else:
+            print(f"Processing giant donut data ({len(gd_files)} datasets).")
 
-    if len(gd_files) == 0:
-        print(f"No giant donut data found for {state_key_str}.")
-        return None
-    else:
-        print(f"Processing giant donut data for {state_key_str} ({len(gd_files)} datasets).")
-        gd_results_list = []
-        for gd_file in gd_files:
-            ff = asdf.open(gd_file)
-            # get ds
-            sweep = ff['ds'][~np.isclose(ff['ds'], np.zeros_like(ff['ds']), atol=1e-2)]
-            print(sweep)
-            if len(sweep) > 1:
-                multiplier = 1. # multiple things moving - don't divide out by the sweep
-            else:
-                multiplier = sweep
-            # sweep = ff['ds'][np.nonzero(ff['ds'])[0]]
-            # get sensitivities
-            ms = ff['measured_sensitivity'] / 1000 / multiplier # nm to um/um (or just um for v/z modes)
-            ps = ff['predicted_sensitivity'] / 1000 / multiplier # nm to um/um
-    
-            gd_results_dict = {}
-            gd_results_dict['reason'] = ff['reason']
-            gd_results_dict['ds'] = sweep
-            gd_results_dict['measured_sensitivity'] = ms
-            gd_results_dict['predicted_sensitivity'] = ps
-            gd_results_list.append(gd_results_dict)
-    
-        return gd_results_list
+    gd_files.sort()
+    gd_results_list = []
+    for gd_file in gd_files:
+        ff = asdf.open(gd_file)
+        # get ds
+        sweep = ff['ds'][~np.isclose(ff['ds'], np.zeros_like(ff['ds']), atol=1e-2)]
+        print(sweep)
+        if len(sweep) > 1:
+            multiplier = 1. # multiple things moving - don't divide out by the sweep
+        else:
+            multiplier = sweep
+        # sweep = ff['ds'][np.nonzero(ff['ds'])[0]]
+        # get sensitivities
+        ms = ff['measured_sensitivity'] / 1000 / multiplier # nm to um/um (or just um for v/z modes)
+        ps = ff['predicted_sensitivity'] / 1000 / multiplier # nm to um/um
+
+        gd_results_dict = {}
+        gd_results_dict['reason'] = ff['reason']
+        gd_results_dict['ds'] = sweep
+        gd_results_dict['measured_sensitivity'] = ms
+        gd_results_dict['predicted_sensitivity'] = ps
+        gd_results_list.append(gd_results_dict)
+
+    return gd_results_list
 
 def combine_results_by_dof(all_results):
     """
@@ -662,7 +664,7 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
     # Get DOF and file keys
     state_key = results_list[0]["state_key"]
     unit_alpha = results_list[0]["unit_alpha"]
-    file_keys = [r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
+    file_keys = ["FAM " + r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
     
     print(f"\nCreating combined summary plot for DOF: {state_key}")
     print(f"  Combining data from {len(file_keys)} files: {file_keys}")
@@ -670,22 +672,19 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
     # Determine dimensions from the first result
     n_coefs = results_list[0]["data_linear_fits"].shape[0]
     n_zernikes = results_list[0]["data_linear_fits"].shape[1]
+    n_datasets = len(results_list) + (len(gd_results_list) if gd_results_list is not None else 0)
     
     # Define markers for different Zernikes
     markers = ['o', 's', '^', 'd', 'v', 'p', 'h', '*']
     
     # Get a color palette for the different datasets
-    dataset_colors = plt.cm.tab10.colors[:len(results_list)]
-    gd_colors = ['r', 'b', 'g']
-    # for legend, will get just the colors that get used
-    all_colors = []
+    dataset_colors = plt.cm.tab10.colors[:n_datasets]
     
     print("Creating combined summary plot of sensitivity coefficients")
-    fig, ax = plt.subplots(figsize=(11,6))
+    fig, ax = plt.subplots(figsize=(15,6))
     
     # Calculate stagger parameters
-    n_datasets = len(results_list)
-    n_active_zernikes = n_zernikes - 4  # We're using Zernikes from index 4 onward
+    n_active_zernikes = n_zernikes - 4  # We're using Zernikes from Noll index 4 onward
     
     total_width = 1. # Total width for all points at focal Zernike
     # gap_width = 0.05 # gap between datasets for one focal Zernike
@@ -693,8 +692,7 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
     zk_width = dataset_width / n_active_zernikes # space b/w data points
 
     # set up for plotting labels etc
-    trans = transforms.blended_transform_factory(
-    ax.transData, ax.transAxes)
+    trans = transforms.blended_transform_factory(ax.transData, ax.transAxes)
 
     for file_idx, results in enumerate(results_list):
         # where does the first point in the dataset get plotted
@@ -702,7 +700,6 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
 
         # Get the color for this dataset
         color = dataset_colors[file_idx]
-        all_colors.append(color)
 
         for j in range(4, n_zernikes):
             jj = j - 4
@@ -767,22 +764,15 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
 
     # add giant donut sensitivities
     if gd_results_list is not None:
-        # Might be different number of datasets -- recalculate stagger parameters
-        n_datasets = len(gd_results_list)
-        n_active_zernikes = n_zernikes - 4  # We're using Zernikes from index 4 onward
-        total_width = 1. # Total width for all points at focal Zernike
-        # gap_width = 0.05 # gap between datasets for one focal Zernike
-        dataset_width = total_width / n_datasets
-        zk_width = dataset_width / n_active_zernikes # space b/w data points
         for file_idx, gd_results in enumerate(gd_results_list):
-
+            
+            adjusted_file_idx = file_idx + len(results_list)
             file_keys.append(f"GD {gd_results['reason'][:8]}")
+            
             # Get the color for this dataset
-            color = gd_colors[file_idx]
-            all_colors.append(color)
-
+            color = dataset_colors[adjusted_file_idx]
             # where does the first point in the dataset get plotted
-            dataset_base_offset = (zk_width-total_width)/2  + file_idx * zk_width
+            dataset_base_offset = (zk_width-total_width)/2  + adjusted_file_idx * zk_width
 
             for j in range(4, n_zernikes):
                 jj = j - 4
@@ -855,7 +845,7 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
 
     handles, labels = ax.get_legend_handles_labels()
     for file_idx, file_key in enumerate(file_keys):
-        color = all_colors[file_idx]
+        color = dataset_colors[file_idx]
         marker = 'o'
         if 'GD' in file_key:
             marker = '^'
@@ -1194,7 +1184,9 @@ def plot_results(results, output_dir, date):
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and analyze sensitivity data")
-    parser.add_argument("files", nargs="+", help="Sensitivity analysis files to process")
+    parser.add_argument("files", nargs="+", help="FAM sensitivity analysis files to process")
+    parser.add_argument("--include_giant_donuts", action="store_true", help="Include giant donut sensitivity analysis results if available")
+    parser.add_argument("--gd_files", nargs="+", help="Giant donut sensitivity analysis files to process (otherwise will attempt to automatically retrieve them")
     parser.add_argument("--output", "-o", default="sens_results", help="Output directory for plots")
     parser.add_argument("--kmax", type=int, default=3, help="Maximum focal Zernike coefficient to fit")
     parser.add_argument("--jmax", type=int, default=28, help="Maximum pupil Zernike coefficient to fit")
@@ -1250,10 +1242,8 @@ def main():
 
     # add giant donut data points
     # if args.giant_donuts:
-    if True:
-        gd_results_list = process_giant_donuts(state_key_str)
-    else:
-        gd_results_list = None
+    if args.include_giant_donuts is not None:
+        gd_results_list = process_giant_donuts(args.gd_files, state_key_str)
     
     for dof, results_list in combined_results.items():
         print(f"\nCombining {len(results_list)} files for DOF: {dof}")
