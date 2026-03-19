@@ -1,0 +1,12 @@
+# ASDF files
+**/*.asdf
+
+# PDF files
+**/*.pdf
+
+# PNG files
+**/*.png
+
+# Jupyter notebook checkpoints
+**/.ipynb_checkpoints/
+**/*-checkpoint.ipynb
