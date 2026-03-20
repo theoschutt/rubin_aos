@@ -215,9 +215,9 @@ def process_sensitivity_file(filename, jmax, kmax):
     #     results, unique_expids, unit_alpha
     # )
     # Perform linear fits
-    linear_fits, fit_errors, r_squared, x_values, y_values = perform_linear_fits(
-        results, unique_expids, unit_alpha
-    )
+    # linear_fits, fit_errors, r_squared, x_values, y_values = perform_linear_fits(
+    #     results, unique_expids, unit_alpha
+    # )
     # Perform linear fits for real data
     data_linear_fits, data_fit_errors, data_r_squared, x_values, data_y_values = perform_linear_fits(
         results, unique_expids, unit_alpha, coeff_key="focal_zernike_data_coeffs"
@@ -246,8 +246,19 @@ def process_sensitivity_file(filename, jmax, kmax):
     
     return results
 
-def process_giant_donuts(gd_files=None, state_key_str=None):
+def process_giant_donuts(gd_files=None, state_key_str=None, kmax=None, jmax=None):
     """Process all giant donut sensitivity analysis files for the given state key. Doesn't work for multi-DOF runs yet."""
+    # get DOF names to match to the ds array
+    dof_order = []
+    for i, prefix in enumerate(["M2_", "Cam_"]):
+        for j, suffix in enumerate(["z", "x", "y", "rx", "ry"]):
+            dof_order.append(f'{prefix}{suffix}')
+    for i in range(20):
+        dof_order.append(f"M1M3_B{i+1}")
+    for i in range(20):
+        dof_order.append(f"M2_B{i+1}")
+    dof_order = np.array(dof_order)
+
     if gd_files is None:
         print(f"Retrieving giant donut data for {state_key_str}.")
         
@@ -259,7 +270,7 @@ def process_giant_donuts(gd_files=None, state_key_str=None):
         # glob all matching files and sort
         gd_dir = "/sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/"
         gd_files = glob.glob(gd_dir + f"hartmann_zernike_sensitivity*{state_key_str.lower()}.asdf")
-        
+
         if len(gd_files) == 0:
             print(f"No giant donut data found.")
             return None
@@ -271,7 +282,9 @@ def process_giant_donuts(gd_files=None, state_key_str=None):
     for gd_file in gd_files:
         ff = asdf.open(gd_file)
         # get ds
-        sweep = ff['ds'][~np.isclose(ff['ds'], np.zeros_like(ff['ds']), atol=1e-2)]
+        mask = ~np.isclose(ff['ds'], np.zeros_like(ff['ds']), atol=1e-2)
+        sweep = ff['ds'][mask]
+        dof_names = dof_order[mask]
         print(sweep)
         if len(sweep) > 1:
             multiplier = 1. # multiple things moving - don't divide out by the sweep
@@ -282,9 +295,18 @@ def process_giant_donuts(gd_files=None, state_key_str=None):
         ms = ff['measured_sensitivity'] / 1000 / multiplier # nm to um/um (or just um for v/z modes)
         ps = ff['predicted_sensitivity'] / 1000 / multiplier # nm to um/um
 
+        # Limit to kmax (focal Zernikes, axis 0) and jmax (pupil Zernikes, axis 1)
+        if kmax is not None:
+            ms = ms[:kmax+1, :]
+            ps = ps[:kmax+1, :]
+        if jmax is not None:
+            ms = ms[:, :jmax+1]
+            ps = ps[:, :jmax+1]
+
         gd_results_dict = {}
         gd_results_dict['reason'] = ff['reason']
         gd_results_dict['ds'] = sweep
+        gd_results_dict['dof_names'] = dof_names
         gd_results_dict['measured_sensitivity'] = ms
         gd_results_dict['predicted_sensitivity'] = ps
         gd_results_list.append(gd_results_dict)
@@ -646,32 +668,46 @@ def create_summary_plot(results, output_dir, date):
     plt.savefig(summary_file, dpi=150)
     plt.close(fig)
 
-def create_combined_summary_plot(results_list, output_dir, gd_results_list=None):
+def create_combined_summary_plot(results_list, output_dir, gd_results_list=None, state_key_override=None):
     """
     Create a summary plot of sensitivity coefficients for multiple datasets.
     Plots both real data (with error bars) and simulation data (as points).
-    
+
     Parameters:
     -----------
     results_list : list
-        List of result dictionaries, each from a different data set but same DOF
+        List of result dictionaries, each from a different data set but same DOF.
+        Can be empty if gd_results_list is provided (GD-only mode).
     output_dir : Path
         Directory to save the output plot
+    gd_results_list : list, optional
+        List of giant donut result dictionaries
+    state_key_override : str, optional
+        State key to use when results_list is empty (GD-only mode)
     """
-    if not results_list:
+    if not results_list and not gd_results_list:
         return
-    
-    # Get DOF and file keys
-    state_key = results_list[0]["state_key"]
-    unit_alpha = results_list[0]["unit_alpha"]
-    file_keys = ["FAM " + r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
-    
+
+    # Get DOF, dimensions, and file keys depending on available data
+    if results_list:
+        state_key = results_list[0]["state_key"]
+        unit_alpha = results_list[0]["unit_alpha"]
+        file_keys = ["FAM " + r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
+        n_coefs = results_list[0]["data_linear_fits"].shape[0]
+        n_zernikes = results_list[0]["data_linear_fits"].shape[1]
+    else:
+        # GD-only mode — derive dimensions from giant donut data
+        sk = state_key_override if state_key_override else gd_results_list[0]["reason"][:8]
+        state_key = [sk] if isinstance(sk, str) else sk
+        unit_alpha = gd_results_list[0]["ds"]
+        dof_names = gd_results_list[0]["dof_names"]
+        file_keys = []
+        n_coefs = gd_results_list[0]["measured_sensitivity"].shape[0]
+        n_zernikes = gd_results_list[0]["measured_sensitivity"].shape[1]
+
     print(f"\nCreating combined summary plot for DOF: {state_key}")
-    print(f"  Combining data from {len(file_keys)} files: {file_keys}")
-    
-    # Determine dimensions from the first result
-    n_coefs = results_list[0]["data_linear_fits"].shape[0]
-    n_zernikes = results_list[0]["data_linear_fits"].shape[1]
+    print(f"  Combining data from {len(file_keys)} FAM files + {len(gd_results_list) if gd_results_list else 0} GD files")
+
     n_datasets = len(results_list) + (len(gd_results_list) if gd_results_list is not None else 0)
     
     # Define markers for different Zernikes
@@ -811,14 +847,37 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
                     alpha=0.8
                 )
 
+                # add visual clarity
+                if (file_idx == 0):
+                    for xpos in x_positions:
+                        # add j labeling
+                        ax.text(xpos + zk_width * (n_datasets - 1)/2, 0., j,
+                        transform=trans, horizontalalignment='center',
+                        verticalalignment='bottom'
+                        )
+                        if j%2 == 0:
+                            # add shaded boxes grouping j Zernikes
+                            ax.axvspan(
+                                xpos - zk_width/2,
+                                xpos + n_datasets * zk_width - zk_width/2,
+                                color='k',
+                                alpha=0.1
+                            )
     # Add unit alpha info
     ax.text(1.01, 0.98, "Step size [um or deg]:", transform=ax.transAxes)
     for idx, sk in enumerate(state_key):
         ua_list = []
         for results in results_list:
             ua_list.append(results["unit_alpha"][idx])
+        if ua_list:
+            ua_text = str([f"{ua:.5f}" for ua in ua_list])
+            ax.text(1.02, 0.98 - (idx+1)*0.04,
+                f"{sk}: " + ua_text,
+                transform=ax.transAxes)
+    # unit alpha info for giant donuts
+    for idx, (ua, dof_name) in enumerate(zip(unit_alpha, dof_names)):
         ax.text(1.02, 0.98 - (idx+1)*0.04,
-                f"{sk}: " + str([f"{ua:.5f}" for ua in ua_list]),
+                f"{dof_name}: " + f"{ua:.5f}",
                 transform=ax.transAxes)
     # divide focal zernikes
     for dz in range(1, n_coefs):
@@ -833,7 +892,7 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None)
     # Add grid lines
     ax.grid(True, axis='y', alpha=0.5)
 
-    if len(state_key) > 1:
+    if len(state_key) > 1 or len(unit_alpha) > 1:
         units = "dimless"
     elif "r" in state_key:
         units = "deg"
@@ -1184,14 +1243,20 @@ def plot_results(results, output_dir, date):
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and analyze sensitivity data")
-    parser.add_argument("files", nargs="+", help="FAM sensitivity analysis files to process")
+    parser.add_argument("files", nargs="*", default=[], help="FAM sensitivity analysis files to process (optional if --gd_files provided)")
     parser.add_argument("--include_giant_donuts", action="store_true", help="Include giant donut sensitivity analysis results if available")
-    parser.add_argument("--gd_files", nargs="+", help="Giant donut sensitivity analysis files to process (otherwise will attempt to automatically retrieve them")
+    parser.add_argument("--gd_files", nargs="*", default=[], help="Giant donut sensitivity analysis files to process (optional if using FAM files)")
+    parser.add_argument("--state_key", type=str, default=None, help="State key string (required for GD-only mode without FAM files)")
     parser.add_argument("--output", "-o", default="sens_results", help="Output directory for plots")
     parser.add_argument("--kmax", type=int, default=3, help="Maximum focal Zernike coefficient to fit")
     parser.add_argument("--jmax", type=int, default=28, help="Maximum pupil Zernike coefficient to fit")
     args = parser.parse_args()
-    
+
+    if not args.files and not args.gd_files and not args.include_giant_donuts:
+        parser.error("Must provide either FAM files, --gd_files, or --include_giant_donuts (or a combination)")
+    if not args.files and not args.state_key:
+        parser.error("--state_key is required when no FAM files are provided")
+
     print(f"\n=== Sensitivity Analysis Data Extraction ===")
     print(f"Files to process: {len(args.files)}")
     print(f"Output directory: {args.output}")
@@ -1203,7 +1268,8 @@ def main():
     print(f"Output directory created: {output_dir}")
     
     all_results = {}
-    
+    state_key_str = args.state_key  # May be None if FAM files will set it
+
     for i, filename in enumerate(args.files):
         print(f"\nProcessing file {i+1}/{len(args.files)}: {filename}")
         file_start_time = time.time()
@@ -1214,50 +1280,55 @@ def main():
                 state_key_str = f"{state_key[0]}"
             else:
                 state_key_str = f"{state_key}"
-            # if len(state_key) > 1:
-            #     state_key_str += f"+{len(state_key)-1}"
-        
+
         # Process the file
         results = process_sensitivity_file(filename, jmax=args.jmax, kmax=args.kmax)
-        
+
         # Save results
         file_key = Path(filename).stem[21:34]
         date = file_key[:8]
         all_results[file_key] = results
-        
-        # Generate plots - skipping 
+
+        # Generate plots - skipping
         subdir = state_key_str + "_" + file_key
         plot_dir = output_dir / subdir
         # plot_results(results, plot_dir, date)
-        
+
         file_elapsed = time.time() - file_start_time
         print(f"File {i+1}/{len(args.files)} completed in {file_elapsed:.2f} seconds")
 
     # Create combined plots by DOF (still handles one dataset)
     print("\n=== Creating combined plots for same DOFs ===")
     combined_results = combine_results_by_dof(all_results)
-    
+
     combined_dir = output_dir / f"DOF_combined"
     combined_dir.mkdir(exist_ok=True)
 
-    # add giant donut data points
-    # if args.giant_donuts:
-    if args.include_giant_donuts is not None:
-        gd_results_list = process_giant_donuts(args.gd_files, state_key_str)
-    
-    for dof, results_list in combined_results.items():
-        print(f"\nCombining {len(results_list)} files for DOF: {dof}")
+    # Process giant donut data
+    gd_results_list = None
+    if args.include_giant_donuts or args.gd_files:
+        gd_results_list = process_giant_donuts(args.gd_files if args.gd_files else None, state_key_str, kmax=args.kmax, jmax=args.jmax)
 
-        # these both handle when there's only one dataset
-        create_combined_summary_plot(results_list, combined_dir, gd_results_list)
-        # create_combined_concatenated_plot(results_list, combined_dir)
+    if combined_results:
+        # FAM data exists — plot per-DOF (with optional GD overlay)
+        for dof, results_list in combined_results.items():
+            print(f"\nCombining {len(results_list)} files for DOF: {dof}")
+            create_combined_summary_plot(results_list, combined_dir, gd_results_list)
+            # create_combined_concatenated_plot(results_list, combined_dir)
+    elif gd_results_list:
+        # GD-only mode — no FAM data
+        print("\nGD-only mode: creating summary plot from giant donut data")
+        create_combined_summary_plot([], combined_dir, gd_results_list, state_key_override=state_key_str)
 
     # Save all results to a pickle file
+    results_to_save = {"fam_results": all_results}
+    if gd_results_list is not None:
+        results_to_save["gd_results"] = gd_results_list
     results_file = output_dir / f"all_results.pkl"
     print(f"\nSaving all results to {results_file}")
     with open(results_file, "wb") as f:
-        pickle.dump(all_results, f)
-    
+        pickle.dump(results_to_save, f)
+
     print(f"All processing completed. Results saved to {output_dir}")
 
 if __name__ == "__main__":
