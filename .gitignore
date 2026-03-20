@@ -10,3 +10,9 @@
 # Jupyter notebook checkpoints
 **/.ipynb_checkpoints/
 **/*-checkpoint.ipynb
+
+# output files
+sens_results*/
+
+# Josh's sensitivity_matrix code
+sensitivity_matrix/
