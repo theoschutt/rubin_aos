@@ -874,14 +874,15 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None,
             ax.text(1.02, 0.98 - (idx+1)*0.04,
                 f"{sk}: " + ua_text,
                 transform=ax.transAxes)
-    # unit alpha info for giant donuts
-    for idx, (ua, dof_name) in enumerate(zip(unit_alpha, dof_names)):
-        ax.text(1.02, 0.98 - (idx+1)*0.04,
-                f"{dof_name}: " + f"{ua:.5f}",
-                transform=ax.transAxes)
-    # divide focal zernikes
-    for dz in range(1, n_coefs):
-        ax.axvline(dz+0.5, lw=1., c='gray')
+    if gd_results_list is not None:
+        # unit alpha info for giant donuts
+        for idx, (ua, dof_name) in enumerate(zip(unit_alpha, dof_names)):
+            ax.text(1.02, 0.98 - (idx+1)*0.04,
+                    f"{dof_name}: " + f"{ua:.5f}",
+                    transform=ax.transAxes)
+        # divide focal zernikes
+        for dz in range(1, n_coefs):
+            ax.axvline(dz+0.5, lw=1., c='gray')
 
     # Set integer ticks on x-axis
     ax.set_xlim(0.5, 3.5)
