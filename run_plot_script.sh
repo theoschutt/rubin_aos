@@ -147,32 +147,54 @@ python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity
 
 ##### FAM V-MODES #####
 
+# 'Cam_rx', 'Cam_ry'
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300478.asdf --kmax 3 --jmax 11
+
+# 'M2_rx', 'M2_ry', 'Cam_z', 'Cam_rx', 'Cam_ry', 'M1M3_B1', 'M1M3_B2', 
+# 'M1M3_B4', 'M1M3_B5', 'M2_B1', 'M2_B2', 'M2_B3', 'M2_B4
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300538.asdf --kmax 3 --jmax 11
+
+# M2_rx, M2_ry
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300448.asdf sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300463.asdf --kmax 3 --jmax 11
+
+# 'M2_z', 'Cam_z', 'Cam_rx', 'Cam_ry', 'M1M3_B1', 'M1M3_B3', 'M2_B2', 'M2_B5'
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300508.asdf --kmax 3 --jmax 11
+
+# M2_z, Cam_z, M1M3_B1, M1M3_B2, M1M3_B3, M1M3_B4, M1M3_B5,
+# M2_B1, M2_B2, M2_B3, M2_B4, M2_B5
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300583.asdf sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300598.asdf --kmax 3 --jmax 11
+
 # M2_z, Cam_z
-# python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025051300539.asdf --kmax 3 --jmax 11
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025051300539.asdf --kmax 3 --jmax 11
+
+# M2_z', 'M2_rx', 'Cam_z', 'Cam_rx', 'M1M3_B1', 'M1M3_B2', 'M1M3_B3', 
+# 'M1M3_B4', 'M1M3_B5', 'M2_B1', 'M2_B2', 'M2_B3', 'M2_B4
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300553.asdf --kmax 3 --jmax 11
+
+# 'M2_z', 'M2_rx', 'M2_ry', 'Cam_z', 'Cam_ry', 'M1M3_B1', 'M1M3_B2',
+# 'M1M3_B4', 'M2_B1', 'M2_B2', 'M2_B3', 'M2_B4
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300523.asdf --kmax 3 --jmax 11
+
+# M2_z', 'M2_ry', 'Cam_z', 'Cam_ry', 'M1M3_B1', 'M1M3_B2', 'M1M3_B3',
+# 'M1M3_B4', 'M1M3_B5', 'M2_B1', 'M2_B2', 'M2_B3', 'M2_B4', 'M2_B5'
+python fit_plot_dbl_zks_sens.py sensitivity_matrix/danish_dense/asdf/sensitivity_analysis_2025052300568.asdf --kmax 3 --jmax 11
 
 ##### GIANT DONUTS #####
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:31:13.665_reason_20251119_zmode_1_7.asdf --state_key zmode_1_7 --kmax 3
- --jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:31:13.665_reason_20251119_zmode_1_7.asdf --state_key zmode_1_7 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:38:04.442_reason_20251119_zmode_1_8.asdf --state_key zmode_1_8 --kmax 3
- --jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:38:04.442_reason_20251119_zmode_1_8.asdf --state_key zmode_1_8 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:38:54.077_reason_20251119_zmode_2_5.asdf --state_key zmode_2_5 --kmax 3
- --jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:38:54.077_reason_20251119_zmode_2_5.asdf --state_key zmode_2_5 --kmax 3 --jmax 11
 
 python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T05:43:44.180_reason_20251119_zmode_3_5.asdf --state_key zmode_3_5 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:29:58.406_reason_20251119_jmode_1.asdf --state_key nullmode_1 --kmax 3 
---jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:29:58.406_reason_20251119_jmode_1.asdf --state_key nullmode_1 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:30:29.595_reason_20251119_jmode_2.asdf --state_key nullmode_2 --kmax 3 
---jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:30:29.595_reason_20251119_jmode_2.asdf --state_key nullmode_2 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:35:39.639_reason_20251119_jmode_3.asdf --state_key nullmode_3 --kmax 3 
---jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:35:39.639_reason_20251119_jmode_3.asdf --state_key nullmode_3 --kmax 3 --jmax 11
 
-python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:41:20.477_reason_20251119_jmode_4.asdf --state_key nullmode_4 --kmax 3 
---jmax 11
+python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:41:20.477_reason_20251119_jmode_4.asdf --state_key nullmode_4 --kmax 3 --jmax 11
 
 python fit_plot_dbl_zks_sens.py --gd_files /sdf/data/rubin/u/jmeyers3/projects/aos/Hartmann/dz_matrix/hartmann_zernike_sensitivity_group_2025-11-20T06:47:02.667_reason_20251119_jmode_5.asdf --state_key nullmode_5 --kmax 3 --jmax 11
