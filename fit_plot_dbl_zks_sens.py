@@ -247,7 +247,7 @@ def process_sensitivity_file(filename, jmax, kmax):
     return results
 
 def process_giant_donuts(gd_files=None, state_key_str=None, kmax=None, jmax=None):
-    """Process all giant donut sensitivity analysis files for the given state key. Doesn't work for multi-DOF runs yet."""
+    """Process all giant donut sensitivity analysis files for the given state key."""
     # get DOF names to match to the ds array
     dof_order = []
     for i, prefix in enumerate(["M2_", "Cam_"]):
@@ -1316,19 +1316,30 @@ def main():
             print(f"\nCombining {len(results_list)} files for DOF: {dof}")
             create_combined_summary_plot(results_list, combined_dir, gd_results_list)
             # create_combined_concatenated_plot(results_list, combined_dir)
+            # Save per-DOF pickle
+            gd_fn_str = "+gd" if gd_results_list is not None else ""
+            state_key_padded = _pad_state_key(dof) if len(results_list[0]["state_key"]) == 1 else dof
+            dof_pkl_file = combined_dir / f"{state_key_padded}_all_results{gd_fn_str}.pkl"
+            dof_results_to_save = {"fam_results": {r["file_key"]: r for r in results_list}}
+            if gd_results_list is not None:
+                dof_results_to_save["gd_results"] = gd_results_list
+            print(f"  Saving per-DOF results to {dof_pkl_file}")
+            with open(dof_pkl_file, "wb") as f:
+                pickle.dump(dof_results_to_save, f)
     elif gd_results_list:
         # GD-only mode — no FAM data
         print("\nGD-only mode: creating summary plot from giant donut data")
         create_combined_summary_plot([], combined_dir, gd_results_list, state_key_override=state_key_str)
-
-    # Save all results to a pickle file
-    results_to_save = {"fam_results": all_results}
-    if gd_results_list is not None:
-        results_to_save["gd_results"] = gd_results_list
-    results_file = output_dir / f"all_results.pkl"
-    print(f"\nSaving all results to {results_file}")
-    with open(results_file, "wb") as f:
-        pickle.dump(results_to_save, f)
+        gd_dof_names = gd_results_list[0]["dof_names"]
+        if len(gd_dof_names) == 1:
+            gd_state_key_padded = _pad_state_key(str(gd_dof_names[0]))
+        else:
+            gd_state_key_padded = str(list(gd_dof_names))
+        dof_pkl_file = combined_dir / f"{gd_state_key_padded}_GD_results.pkl"
+        dof_results_to_save = {"gd_results": gd_results_list}
+        print(f"  Saving GD-only results to {dof_pkl_file}")
+        with open(dof_pkl_file, "wb") as f:
+            pickle.dump(dof_results_to_save, f)
 
     print(f"All processing completed. Results saved to {output_dir}")
 
