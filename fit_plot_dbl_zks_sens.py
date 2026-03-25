@@ -695,6 +695,8 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None,
         file_keys = ["FAM " + r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
         n_coefs = results_list[0]["data_linear_fits"].shape[0]
         n_zernikes = results_list[0]["data_linear_fits"].shape[1]
+        if gd_results_list:
+            dof_names = gd_results_list[0]['dof_names']
     else:
         # GD-only mode — derive dimensions from giant donut data
         sk = state_key_override if state_key_override else gd_results_list[0]["reason"][:8]
@@ -848,23 +850,25 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None,
                 )
 
                 # add visual clarity
-                if (file_idx == 0):
-                    for xpos in x_positions:
-                        # add j labeling
-                        ax.text(xpos + zk_width * (n_datasets - 1)/2, 0., j,
-                        transform=trans, horizontalalignment='center',
-                        verticalalignment='bottom'
-                        )
-                        if j%2 == 0:
-                            # add shaded boxes grouping j Zernikes
-                            ax.axvspan(
-                                xpos - zk_width/2,
-                                xpos + n_datasets * zk_width - zk_width/2,
-                                color='k',
-                                alpha=0.1
+                if not results_list:
+                    if (file_idx == 0):
+                        for xpos in x_positions:
+                            # add j labeling
+                            ax.text(xpos + zk_width * (n_datasets - 1)/2, 0., j,
+                            transform=trans, horizontalalignment='center',
+                            verticalalignment='bottom'
                             )
+                            if j%2 == 0:
+                                # add shaded boxes grouping j Zernikes
+                                ax.axvspan(
+                                    xpos - zk_width/2,
+                                    xpos + n_datasets * zk_width - zk_width/2,
+                                    color='k',
+                                    alpha=0.1
+                                )
     # Add unit alpha info
     ax.text(1.01, 0.98, "Step size [um or deg]:", transform=ax.transAxes)
+    key_ct = 0
     for idx, sk in enumerate(state_key):
         ua_list = []
         for results in results_list:
@@ -874,11 +878,18 @@ def create_combined_summary_plot(results_list, output_dir, gd_results_list=None,
             ax.text(1.02, 0.98 - (idx+1)*0.04,
                 f"{sk}: " + ua_text,
                 transform=ax.transAxes)
+        key_ct += 1
+    # unit alpha info for giant donuts
     if gd_results_list is not None:
-        # unit alpha info for giant donuts
-        for idx, (ua, dof_name) in enumerate(zip(unit_alpha, dof_names)):
-            ax.text(1.02, 0.98 - (idx+1)*0.04,
-                    f"{dof_name}: " + f"{ua:.5f}",
+        ax.text(1.02, 0.98 - (key_ct+1)*0.04, 'Giant donuts:',
+                transform=ax.transAxes)
+        for idx, dof_name in enumerate(dof_names):
+            ua_list = []
+            for results in gd_results_list:
+                ua_list.append(results["ds"][idx])
+            ua_text = str([f"{ua:.5f}" for ua in ua_list])
+            ax.text(1.02, 0.98 - (key_ct+idx+2)*0.04,
+                    f"{dof_name}: " + ua_text,
                     transform=ax.transAxes)
         # divide focal zernikes
         for dz in range(1, n_coefs):
