@@ -1304,6 +1304,8 @@ def main():
 
     combined_dir = output_dir / f"DOF_combined"
     combined_dir.mkdir(exist_ok=True)
+    comb_out_dir = output_dir / f"DOF_combined" / "all_results"
+    comb_out_dir.mkdir(exist_ok=True)
 
     # Process giant donut data
     gd_results_list = None
@@ -1319,7 +1321,7 @@ def main():
             # Save per-DOF pickle
             gd_fn_str = "+gd" if gd_results_list is not None else ""
             state_key_padded = _pad_state_key(dof) if len(results_list[0]["state_key"]) == 1 else dof
-            dof_pkl_file = combined_dir / f"{state_key_padded}_all_results{gd_fn_str}.pkl"
+            dof_pkl_file = comb_out_dir / f"{state_key_padded}_all_results{gd_fn_str}.pkl"
             dof_results_to_save = {"fam_results": {r["file_key"]: r for r in results_list}}
             if gd_results_list is not None:
                 dof_results_to_save["gd_results"] = gd_results_list
@@ -1332,10 +1334,10 @@ def main():
         create_combined_summary_plot([], combined_dir, gd_results_list, state_key_override=state_key_str)
         gd_dof_names = gd_results_list[0]["dof_names"]
         if len(gd_dof_names) == 1:
-            gd_state_key_padded = _pad_state_key(str(gd_dof_names[0]))
+            gd_state_key_padded = _pad_state_key(gd_dof_names[0])
         else:
-            gd_state_key_padded = str(list(gd_dof_names))
-        dof_pkl_file = combined_dir / f"{gd_state_key_padded}_GD_results.pkl"
+            gd_state_key_padded = state_key_str
+        dof_pkl_file = comb_out_dir / f"{gd_state_key_padded}_GD_results.pkl"
         dof_results_to_save = {"gd_results": gd_results_list}
         print(f"  Saving GD-only results to {dof_pkl_file}")
         with open(dof_pkl_file, "wb") as f:
