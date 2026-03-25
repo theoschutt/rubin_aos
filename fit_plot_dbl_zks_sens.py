@@ -20,26 +20,26 @@ def _wrap_text(text, max_line_length):
 def _pad_state_key(state_key_str):
     """Adds a leading zero to single digit bending modes to help with sorting."""
     padded_str = re.sub(r'B(\d+)', lambda match: f'B{int(match.group(1)):02d}', state_key_str)
-    print(state_key_str, padded_str)
+    # print(state_key_str, padded_str)
     return padded_str
     
 def fit_focal_zernikes(x, y, zk_all, kmax, R_outer=np.deg2rad(1.75)):
     """Fit focal Zernike coefficients to pupil Zernike values."""
-    print(f"  Fitting focal Zernikes with x shape: {x.shape}, y shape: {y.shape}, zk_all shape: {zk_all.shape}")
+    # print(f"  Fitting focal Zernikes with x shape: {x.shape}, y shape: {y.shape}, zk_all shape: {zk_all.shape}")
     
     # Assuming x/y are in radians
     basis = galsim.zernike.zernikeBasis(kmax, x, y, R_outer=R_outer, R_inner=0.0)
-    print(f"  Basis shape: {basis.shape}")
+    # print(f"  Basis shape: {basis.shape}")
     
     start = time.time()
     coefs_all, residuals, rank, s = np.linalg.lstsq(basis.T, zk_all, rcond=None)
     elapsed = time.time() - start
-    print(f"  Least squares fit completed in {elapsed:.2f} seconds")
-    print(f"  Coefficients shape: {coefs_all.shape}, rank: {rank}")
+    # print(f"  Least squares fit completed in {elapsed:.2f} seconds")
+    # print(f"  Coefficients shape: {coefs_all.shape}, rank: {rank}")
     
     resids_all = basis.T @ coefs_all - zk_all
-    print(f"  Residuals shape: {resids_all.shape}")
-    print(f"  RMS residual: {np.sqrt(np.mean(resids_all**2)):.6f}")
+    # print(f"  Residuals shape: {resids_all.shape}")
+    # print(f"  RMS residual: {np.sqrt(np.mean(resids_all**2)):.6f}")
     
     return coefs_all, resids_all
 
@@ -58,7 +58,7 @@ def extract_data_from_file(filename):
             # Convert each column to a NumPy array
             zkTable[key] = np.array(zkTable_asdf[key])
         
-    print(f"File opened and data converted to native types")
+    # print(f"File opened and data converted to native types")
     print(f"zkTable has data for {len(zkTable['expid'])} rows")
     print(f"state_key: {state_key}")
     print(f"unit_alpha: {unit_alpha}")
@@ -84,10 +84,10 @@ def process_exposure(exp_data, jmax, kmax):
     zk_values = zk_values[:, :jmax+1]  # +1 because we want to include jmax
     zk_sim_values = zk_sim_values[:, :jmax+1]  # +1 because we want to include jmax
     
-    print(f"  thx shape: {thx.shape}, range: [{thx.min():.5f}, {thx.max():.5f}] rad")
-    print(f"  thy shape: {thy.shape}, range: [{thy.min():.5f}, {thy.max():.5f}] rad")
-    print(f"  alpha_values shape: {alpha_values.shape}, value: {alpha_values[0]}")
-    print(f"  zk_values shape after limiting to jmax={jmax}: {zk_values.shape}")
+    # print(f"  thx shape: {thx.shape}, range: [{thx.min():.5f}, {thx.max():.5f}] rad")
+    # print(f"  thy shape: {thy.shape}, range: [{thy.min():.5f}, {thy.max():.5f}] rad")
+    # print(f"  alpha_values shape: {alpha_values.shape}, value: {alpha_values[0]}")
+    # print(f"  zk_values shape after limiting to jmax={jmax}: {zk_values.shape}")
     
     # Check that alpha is the same for all rows
     alpha_min, alpha_max = np.min(alpha_values), np.max(alpha_values)
@@ -96,10 +96,10 @@ def process_exposure(exp_data, jmax, kmax):
         print(f"  Alpha range: [{alpha_min}, {alpha_max}], std: {np.std(alpha_values)}")
         
     alpha = float(np.mean(alpha_values))  # Ensure it's a plain float
-    print(f"  Using mean alpha value: {alpha}")
+    # print(f"  Using mean alpha value: {alpha}")
     
     # Fit focal Zernikes
-    print(f"  Fitting focal Zernikes...")
+    # print(f"  Fitting focal Zernikes...")
     data_coefs, data_resids = fit_focal_zernikes(thx, thy, zk_values, kmax)
     sim_coefs, sim_resids = fit_focal_zernikes(thx, thy, zk_sim_values, kmax)
     
@@ -118,9 +118,9 @@ def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zer
     n_coefs = first_exp[coeff_key].shape[0]
     n_zernikes = first_exp[coeff_key].shape[1]
     
-    print(f"\nPerforming linear fits across {len(unique_expids)} exposures for {coeff_key}")
-    print(f"Number of focal Zernike coefficients: {n_coefs}")
-    print(f"Number of pupil Zernikes: {n_zernikes}")
+    # print(f"\nPerforming linear fits across {len(unique_expids)} exposures for {coeff_key}")
+    # print(f"Number of focal Zernike coefficients: {n_coefs}")
+    # print(f"Number of pupil Zernikes: {n_zernikes}")
     
     # Prepare data for linear fit
     # if multiple DOFs are moving, we need to just use the dimensionless alpha
@@ -129,25 +129,25 @@ def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zer
     else:
         unit_alpha_multiplier = 1.
 
-    print(f"ALPHA INFO: u_a: {unit_alpha}, u_a.dtype: {unit_alpha.dtype}, type(u_a): {type(unit_alpha)}, u_a multiplier: {unit_alpha_multiplier}")
+    # print(f"ALPHA INFO: u_a: {unit_alpha}, u_a.dtype: {unit_alpha.dtype}, type(u_a): {type(unit_alpha)}, u_a multiplier: {unit_alpha_multiplier}")
 
     x_values = np.array([unit_alpha_multiplier * results["expids"][eid]["alpha"]
                         for eid in unique_expids])
     y_values = np.zeros((len(unique_expids), n_coefs, n_zernikes))
     
-    print(f"x_values shape: {x_values.shape}, range: [{min(x_values)}, {max(x_values)}]")
+    # print(f"x_values shape: {x_values.shape}, range: [{min(x_values)}, {max(x_values)}]")
     
     for i, eid in enumerate(unique_expids):
         y_values[i] = results["expids"][eid][coeff_key]
     
-    print(f"y_values shape: {y_values.shape}")
+    # print(f"y_values shape: {y_values.shape}")
     
     # Perform linear fit
     linear_fits = np.zeros((n_coefs, n_zernikes, 2))  # [m, b] for each coefficient and Zernike
     fit_errors = np.zeros((n_coefs, n_zernikes, 2))   # Error estimates for [m, b]
     r_squared = np.zeros((n_coefs, n_zernikes))
     
-    print("Performing linear fits for each combination...")
+    # print("Performing linear fits for each combination...")
     for k in range(n_coefs):
         for j in range(n_zernikes):
             # Fit y = mx + b using np.polyfit with cov=True to get error estimates
@@ -174,10 +174,10 @@ def perform_linear_fits(results, unique_expids, unit_alpha, coeff_key="focal_zer
 
             # print(f"  Fit for F{k}/Z{j}: m={coef[0]:.6f}, b={coef[1]:.6f}, R²={r_squared[k, j]:.4f}")
     
-    print(f"linear_fits shape: {linear_fits.shape}")
-    print(f"fit_errors shape: {fit_errors.shape}")
-    print(f"r_squared shape: {r_squared.shape}")
-    print(f"Mean R² value: {np.mean(r_squared):.4f}")
+    # print(f"linear_fits shape: {linear_fits.shape}")
+    # print(f"fit_errors shape: {fit_errors.shape}")
+    # print(f"r_squared shape: {r_squared.shape}")
+    # print(f"Mean R² value: {np.mean(r_squared):.4f}")
 
     return linear_fits, fit_errors, r_squared, x_values, y_values
 
@@ -204,11 +204,11 @@ def process_sensitivity_file(filename, jmax, kmax):
         # Get rows for this exposure
         mask = (zkTable["expid"] == expid)
         exp_data = {key: zkTable[key][mask] for key in zkTable.keys()}
-        print(f"  Found {sum(mask)} rows for this exposure")
+        # print(f"  Found {sum(mask)} rows for this exposure")
         
         # Process this exposure
         results["expids"][expid] = process_exposure(exp_data, jmax, kmax)
-        print(f"  Results stored for exposure {expid}")
+        # print(f"  Results stored for exposure {expid}")
     
     # # Perform linear fits
     # linear_fits, r_squared, x_values, y_values = perform_linear_fits(
