@@ -54,9 +54,19 @@ def extract_data_from_file(filename):
         
         # Convert zkTable to a fully loaded structure that doesn't depend on the file
         zkTable = {}
-        for key in zkTable_asdf.dtype.names:
-            # Convert each column to a NumPy array
-            zkTable[key] = np.array(zkTable_asdf[key])
+        try:
+            for key in zkTable_asdf.dtype.names:
+                # Convert each column to a NumPy array
+                zkTable[key] = np.array(zkTable_asdf[key])
+        except AttributeError:
+            for i, colname in enumerate(zkTable_asdf['colnames']):
+                coldata = zkTable_asdf['columns'][i]
+                if 'data' in coldata.keys():
+                    zkTable[colname] = coldata['data'][:]
+                elif 'value' in coldata.keys():
+                    zkTable[colname] = coldata['value'][:]
+                else:
+                    pass
         
     # print(f"File opened and data converted to native types")
     print(f"zkTable has data for {len(zkTable['expid'])} rows")
