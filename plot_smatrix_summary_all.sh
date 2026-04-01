@@ -1,7 +1,7 @@
 # Configuration
 KMAX=6
 JMAX=28
-VERSION="v3"
+VERSION="v4"
 INCLUDE_GD=true
 
 if [ "$INCLUDE_GD" = true ]; then
