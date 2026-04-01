@@ -331,7 +331,7 @@ def combine_results_by_dof(all_results):
     
     for file_key, result in all_results.items():
         state_key = result["state_key"]
-        state_key_str = str(state_key)
+        state_key_str = str(state_key[0]) if len(state_key) == 1 else str(list(state_key))
         if state_key_str not in combined:
             combined[state_key_str] = []
         
@@ -430,64 +430,59 @@ def process_and_save(fam_files, gd_files, include_gd, state_key_str,
 
     return all_results
 
-def create_combined_summary_plot(dof_results, output_dir, version=""):
-    """
-    Create a summary plot of sensitivity coefficients for a single DOF.
-    Plots FAM data (with error bars), GD data (triangles), and simulation (x markers).
+def extract_dof_info(dof_results):
+    """Extract common metadata from a dof_results dict.
 
-    Parameters:
-    -----------
-    dof_results : dict
-        Dict with optional keys 'fam_results' (maps file_key -> result dict),
-        'gd_results' (list of GD result dicts), and 'state_key_str' (fallback
-        state key string for GD-only mode).
-    output_dir : Path
-        Directory to save the output plot
-    version : str, optional
-        Version string appended to output file name
+    Returns
+    -------
+    results_list : list
+        FAM result dicts (may be empty).
+    gd_results_list : list
+        GD result dicts (may be empty).
+    state_key : list of str
+    unit_alpha : array-like or None
+    n_coefs : int
+    n_zernikes : int
+    file_keys : list of str
+        Legend labels for all datasets.
     """
     fam_data = dof_results.get("fam_results", {})
     results_list = list(fam_data.values()) if fam_data else []
     gd_results_list = dof_results.get("gd_results") or []
 
-    if not results_list and not gd_results_list:
-        return
-
-    # Get DOF, dimensions, and file keys depending on available data
     if results_list:
         state_key = results_list[0]["state_key"]
         unit_alpha = results_list[0]["unit_alpha"]
         n_coefs = results_list[0]["data_linear_fits"].shape[0]
         n_zernikes = results_list[0]["data_linear_fits"].shape[1]
     else:
-        # GD-only mode — derive dimensions from giant donut data
         sk = dof_results.get("state_key_str") or gd_results_list[0]["reason"][:8]
         state_key = [sk] if isinstance(sk, str) else sk
         unit_alpha = gd_results_list[0]["ds"]
         n_coefs = gd_results_list[0]["measured_sensitivity"].shape[0]
         n_zernikes = gd_results_list[0]["measured_sensitivity"].shape[1]
 
-    # Build complete file_keys list upfront for both FAM and GD
     file_keys = (["FAM " + r.get("file_key", f"Dataset {i}") for i, r in enumerate(results_list)]
                  if results_list else [])
     if gd_results_list:
         file_keys += [f"GD {gd['reason'][:8]}" for gd in gd_results_list]
-        dof_names = gd_results_list[0]['dof_names']
 
-    print(f"\nCreating combined summary plot for DOF: {state_key}")
-    print(f"  Combining data from {len(results_list) if results_list else 0} FAM files"
-          f" + {len(gd_results_list) if gd_results_list else 0} GD files")
+    return results_list, gd_results_list, state_key, unit_alpha, n_coefs, n_zernikes, file_keys
 
-    n_datasets = (len(results_list) if results_list else 0) + (len(gd_results_list) if gd_results_list else 0)
+
+def setup_kj_figure(n_coefs, n_zernikes, n_datasets):
+    """Create a figure with one subplot per focal Zernike k, j on the x-axis.
+
+    Returns
+    -------
+    fig : Figure
+    axes : list of Axes
+    dataset_width : float
+        Stagger offset between datasets at a given j position.
+    """
     n_active_zernikes = n_zernikes - 4
-    n_subplots = n_coefs - 1  # one subplot per focal Zernike k=1..n_coefs-1
+    n_subplots = n_coefs - 1
 
-    # Get a color palette for the different datasets
-    dataset_colors = plt.cm.tab10.colors[:n_datasets]
-    errorbar_marksize = 6
-    scatter_marksize = 25
-
-    # Dynamic figure width based on number of j points and datasets
     fig_width = max(10, n_active_zernikes * 0.4 + n_datasets * 0.3) + 4
     fig_height = max(4, n_subplots * 2.2)
 
@@ -496,18 +491,92 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
     if n_subplots == 1:
         axes = [axes]
 
-    # Stagger datasets within each j position: 0.8 total width, 0.2 gap
     stagger_total = 0.95
     dataset_width = stagger_total / n_datasets
 
-    # Add alternating shading for even j positions (same on all subplots)
+    # Alternating shading for even j
     for j in range(4, n_zernikes):
         if j % 2 == 0:
             for ax in axes:
                 ax.axvspan(j - 0.5, j + 0.5, color='k', alpha=0.07, lw=0)
 
+    # Per-subplot formatting
+    for ii, ax in enumerate(axes):
+        k = ii + 1
+        ax.set_ylabel(f"k={k}", fontsize=11)
+        ax.axhline(0, color='gray', lw=0.5, ls='-')
+        ax.grid(True, axis='y', alpha=0.4)
+
+    # X-axis on bottom subplot
+    axes[-1].set_xticks(range(4, n_zernikes))
+    axes[-1].set_xticklabels([str(j) for j in range(4, n_zernikes)], fontsize=11)
+    axes[-1].set_xlim(4 - 0.5, n_zernikes - 0.5)
+    axes[-1].set_xlabel("Pupil Zernike Index (j)", fontsize=11)
+
+    return fig, axes, dataset_width
+
+
+def finalize_kj_figure(fig, axes, file_keys, dataset_colors, state_key,
+                       title, output_path, marker_size=6):
+    """Add legend, title, and save a k-j subplot figure.
+
+    Parameters
+    ----------
+    fig : Figure
+    axes : list of Axes
+    file_keys : list of str
+        One label per dataset (FAM and GD combined).
+    dataset_colors : sequence of colors
+    state_key : list of str
+    title : str
+        Figure suptitle text.
+    output_path : Path
+        Full path to save the figure.
+    marker_size : float
+    """
+    # Legend on bottom subplot
+    handles, labels = [], []
+    for file_idx, file_key in enumerate(file_keys):
+        color = dataset_colors[file_idx]
+        marker = '^' if 'GD' in file_key else 'o'
+        handles.append(plt.Line2D([0], [0], color=color, marker=marker,
+                                  linestyle='none', markersize=marker_size))
+        labels.append(file_key)
+    axes[-1].legend(handles, labels, ncols=1, loc='lower left',
+                    bbox_to_anchor=(1.01, 0.), fontsize=11)
+
+    fig.suptitle(title, fontsize=12)
+
+    print(f"  Saving plot to {output_path}")
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def create_combined_summary_plot(dof_results, output_dir, version=""):
+    """
+    Create a summary plot of sensitivity coefficients for a single DOF.
+    Plots FAM data (with error bars), GD data (triangles), and simulation (x markers).
+    """
+    (results_list, gd_results_list, state_key, unit_alpha,
+     n_coefs, n_zernikes, file_keys) = extract_dof_info(dof_results)
+
+    if not results_list and not gd_results_list:
+        return
+
+    print(f"\nCreating combined summary plot for DOF: {state_key}")
+    print(f"  Combining data from {len(results_list)} FAM files"
+          f" + {len(gd_results_list)} GD files")
+
+    n_datasets = len(results_list) + len(gd_results_list)
+    n_subplots = n_coefs - 1
+    dataset_colors = plt.cm.tab10.colors[:n_datasets]
+    errorbar_marksize = 6
+    scatter_marksize = 25
+
+    fig, axes, dataset_width = setup_kj_figure(n_coefs, n_zernikes, n_datasets)
+
     # Plot FAM results
-    for file_idx, results in enumerate(results_list if results_list else []):
+    for file_idx, results in enumerate(results_list):
         color = dataset_colors[file_idx]
         x_offset = (file_idx - (n_datasets - 1) / 2) * dataset_width
         x_positions = np.arange(4, n_zernikes) + x_offset
@@ -527,11 +596,12 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
                 capsize=3, elinewidth=1, markersize=errorbar_marksize,
                 ls='', alpha=0.8
             )
-            ax.scatter(x_positions, sim_slopes, marker='x', color=color, s=scatter_marksize, alpha=0.8)
+            ax.scatter(x_positions, sim_slopes, marker='x', color=color,
+                       s=scatter_marksize, alpha=0.8)
 
     # Plot GD results
-    n_fam = len(results_list) if results_list else 0
-    for file_idx, gd_results in enumerate(gd_results_list if gd_results_list else []):
+    n_fam = len(results_list)
+    for file_idx, gd_results in enumerate(gd_results_list):
         adjusted_file_idx = file_idx + n_fam
         color = dataset_colors[adjusted_file_idx]
         x_offset = (adjusted_file_idx - (n_datasets - 1) / 2) * dataset_width
@@ -547,39 +617,33 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
             ax.scatter(x_positions, data_gd, marker='^', color=color, s=20, alpha=0.8)
             ax.scatter(x_positions, sim_gd, marker='x', color=color, s=20, alpha=0.8)
 
-    # Per-subplot formatting
-    for ii, ax in enumerate(axes):
-        k = ii + 1
-        ax.set_ylabel(f"k={k}", fontsize=11)
-        ax.axhline(0, color='gray', lw=0.5, ls='-')
-        ax.grid(True, axis='y', alpha=0.4)
+    # Add 'Simulation' to legend
+    sim_file_keys = file_keys + ['Simulation']
+    sim_colors = list(dataset_colors) + [(0, 0, 0)]  # black for sim
 
-    # X-axis on bottom subplot only (sharex handles the rest)
-    axes[-1].set_xticks(range(4, n_zernikes))
-    axes[-1].set_xticklabels([str(j) for j in range(4, n_zernikes)], fontsize=11)
-    axes[-1].set_xlim(4-0.5, n_zernikes-0.5)
-    axes[-1].set_xlabel("Pupil Zernike Index (j)", fontsize=11)
-
-    # Unit alpha annotation on top subplot
+    # Unit alpha annotation on top subplot.
+    # set_in_layout(False) prevents constrained_layout from adjusting subplot
+    # positions to accommodate this text block.
     ax_top = axes[0]
     ax_top.text(1.01, 0.99, "Step size [um or deg]:", transform=ax_top.transAxes,
-                fontsize=11, va='top')
+                fontsize=11, va='top').set_in_layout(False)
     key_ct = 0
     for idx, sk in enumerate(state_key):
-        ua_list = [r["unit_alpha"][idx] for r in (results_list if results_list else [])]
+        ua_list = [r["unit_alpha"][idx] for r in results_list]
         if ua_list:
             ax_top.text(1.02, 0.99 - (idx + 1) * 0.12,
                         f"{sk}: " + str([f"{ua:.5f}" for ua in ua_list]),
-                        transform=ax_top.transAxes, fontsize=11, va='top')
+                        transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
         key_ct += 1
     if gd_results_list:
+        dof_names = gd_results_list[0]['dof_names']
         ax_top.text(1.02, 0.99 - (key_ct + 1) * 0.12, 'Giant donuts:',
-                    transform=ax_top.transAxes, fontsize=11, va='top')
+                    transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
         for idx, dof_name in enumerate(dof_names):
             ua_list = [gd["ds"][idx] for gd in gd_results_list]
             ax_top.text(1.02, 0.99 - (key_ct + idx + 2) * 0.12,
                         f"{dof_name}: " + str([f"{ua:.5f}" for ua in ua_list]),
-                        transform=ax_top.transAxes, fontsize=11, va='top')
+                        transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
 
     if len(state_key) > 1 or len(unit_alpha) > 1:
         units = "dimless"
@@ -587,19 +651,23 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
         units = "deg"
     else:
         units = "um"
-    fig.suptitle(_wrap_text(f"{state_key} [wavefront um / DOF {units}]", 80), fontsize=12)
+    title = _wrap_text(f"{state_key} [wavefront um / DOF {units}]", 80)
 
-    # Legend on bottom subplot
+    # Build legend handles — include Simulation x marker
     handles, labels = [], []
     for file_idx, file_key in enumerate(file_keys):
         color = dataset_colors[file_idx]
         marker = '^' if 'GD' in file_key else 'o'
-        handles.append(plt.Line2D([0], [0], color=color, marker=marker, linestyle='none', markersize=errorbar_marksize))
+        handles.append(plt.Line2D([0], [0], color=color, marker=marker,
+                                  linestyle='none', markersize=errorbar_marksize))
         labels.append(file_key)
-    handles.append(plt.Line2D([0], [0], color='k', marker='x', linestyle='none', markersize=errorbar_marksize))
+    handles.append(plt.Line2D([0], [0], color='k', marker='x',
+                              linestyle='none', markersize=errorbar_marksize))
     labels.append('Simulation')
     axes[-1].legend(handles, labels, ncols=1, loc='lower left',
                     bbox_to_anchor=(1.01, 0.), fontsize=11)
+
+    fig.suptitle(title, fontsize=12)
 
     # Save the plot
     state_key_str = state_key
@@ -611,6 +679,53 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
     print(f"  Saving combined summary plot to {summary_file}")
     plt.savefig(summary_file, dpi=150, bbox_inches='tight')
     plt.close(fig)
+
+def find_cached_pkl(fam_files, gd_files, include_gd, state_key_str,
+                    output_dir, ver_str):
+    """Infer the per-DOF pkl path and attempt to load it.
+
+    Parameters
+    ----------
+    fam_files : list of str
+        FAM input files (used to peek at state_key if state_key_str is None).
+    gd_files : list of str
+        GD input files.
+    include_gd : bool
+        Whether giant donuts are included.
+    state_key_str : str or None
+        Explicit state key; inferred from first FAM file if None.
+    output_dir : Path
+        Top-level output directory (e.g. sens_results+sim_max-k6-j28).
+    ver_str : str
+        Version suffix including leading underscore (e.g. '_v3' or '').
+
+    Returns
+    -------
+    (state_key_str, dof_results) or (state_key_str, None) if not found.
+    """
+    if not state_key_str and fam_files:
+        with asdf.open(fam_files[0]) as af:
+            sk = af["state_key"]
+            state_key_str = sk[0] if len(sk) == 1 else str(list(sk))
+    if not state_key_str:
+        return state_key_str, None
+
+    gd_fn_str = "+gd" if (gd_files or include_gd) else ""
+    comb_out_dir = output_dir / "DOF_combined" / "all_results"
+    state_key_padded = _pad_state_key(state_key_str)
+
+    # Try FAM+GD pkl, then FAM-only pkl, then GD-only pkl
+    pkl_candidates = [
+        comb_out_dir / f"{state_key_padded}_all_results{gd_fn_str}{ver_str}.pkl",
+        comb_out_dir / f"{state_key_padded}_all_results{ver_str}.pkl",
+        comb_out_dir / f"{state_key_padded}_GD_results{ver_str}.pkl",
+    ]
+    for pkl_path in pkl_candidates:
+        loaded = load_cached_results(pkl_path)
+        if loaded is not None:
+            return state_key_str, loaded
+    return state_key_str, None
+
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and analyze sensitivity data")
@@ -640,18 +755,12 @@ def main():
     # --- Try to load cached results ---
     all_results = {}
     if args.use_cached:
-        state_key_str = args.state_key
-        if not state_key_str and args.files:
-            with asdf.open(args.files[0]) as af:
-                sk = af["state_key"]
-                state_key_str = sk[0] if len(sk) == 1 else str(list(sk))
-        if state_key_str:
-            gd_fn_str = "+gd" if (args.gd_files or args.include_giant_donuts) else ""
-            cached_pkl = (output_dir / "DOF_combined" / "all_results" /
-                          f"{_pad_state_key(state_key_str)}_all_results{gd_fn_str}{ver_str}.pkl")
-            loaded = load_cached_results(cached_pkl)
-            if loaded is not None:
-                all_results[state_key_str] = loaded
+        state_key_str, loaded = find_cached_pkl(
+            args.files, args.gd_files, args.include_giant_donuts,
+            args.state_key, output_dir, ver_str
+        )
+        if loaded is not None:
+            all_results[state_key_str] = loaded
 
     # --- Process if nothing was loaded ---
     if not all_results:
