@@ -617,33 +617,36 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
             ax.scatter(x_positions, data_gd, marker='^', color=color, s=20, alpha=0.8)
             ax.scatter(x_positions, sim_gd, marker='x', color=color, s=20, alpha=0.8)
 
-    # Add 'Simulation' to legend
-    sim_file_keys = file_keys + ['Simulation']
-    sim_colors = list(dataset_colors) + [(0, 0, 0)]  # black for sim
-
     # Unit alpha annotation on top subplot.
-    # set_in_layout(False) prevents constrained_layout from adjusting subplot
-    # positions to accommodate this text block.
+    extra_artists = []
     ax_top = axes[0]
-    ax_top.text(1.01, 0.99, "Step size [um or deg]:", transform=ax_top.transAxes,
-                fontsize=11, va='top').set_in_layout(False)
+    t = ax_top.text(1.01, 0.99, "Step size [um or deg]:", transform=ax_top.transAxes,
+                    fontsize=11, va='top')
+    t.set_in_layout(False)
+    extra_artists.append(t)
     key_ct = 0
     for idx, sk in enumerate(state_key):
         ua_list = [r["unit_alpha"][idx] for r in results_list]
         if ua_list:
-            ax_top.text(1.02, 0.99 - (idx + 1) * 0.12,
-                        f"{sk}: " + str([f"{ua:.5f}" for ua in ua_list]),
-                        transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
+            t = ax_top.text(1.02, 0.99 - (idx + 1) * 0.12,
+                            f"{sk}: " + str([f"{ua:.5f}" for ua in ua_list]),
+                            transform=ax_top.transAxes, fontsize=11, va='top')
+            t.set_in_layout(False)
+            extra_artists.append(t)
         key_ct += 1
     if gd_results_list:
         dof_names = gd_results_list[0]['dof_names']
-        ax_top.text(1.02, 0.99 - (key_ct + 1) * 0.12, 'Giant donuts:',
-                    transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
+        t = ax_top.text(1.02, 0.99 - (key_ct + 1) * 0.12, 'Giant donuts:',
+                        transform=ax_top.transAxes, fontsize=11, va='top')
+        t.set_in_layout(False)
+        extra_artists.append(t)
         for idx, dof_name in enumerate(dof_names):
             ua_list = [gd["ds"][idx] for gd in gd_results_list]
-            ax_top.text(1.02, 0.99 - (key_ct + idx + 2) * 0.12,
-                        f"{dof_name}: " + str([f"{ua:.5f}" for ua in ua_list]),
-                        transform=ax_top.transAxes, fontsize=11, va='top').set_in_layout(False)
+            t = ax_top.text(1.02, 0.99 - (key_ct + idx + 2) * 0.12,
+                            f"{dof_name}: " + str([f"{ua:.5f}" for ua in ua_list]),
+                            transform=ax_top.transAxes, fontsize=11, va='top')
+            t.set_in_layout(False)
+            extra_artists.append(t)
 
     if len(state_key) > 1 or len(unit_alpha) > 1:
         units = "dimless"
@@ -664,10 +667,12 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
     handles.append(plt.Line2D([0], [0], color='k', marker='x',
                               linestyle='none', markersize=errorbar_marksize))
     labels.append('Simulation')
-    axes[-1].legend(handles, labels, ncols=1, loc='lower left',
+    leg = axes[-1].legend(handles, labels, ncols=1, loc='lower left',
                     bbox_to_anchor=(1.01, 0.), fontsize=11)
+    extra_artists.append(leg)
 
-    fig.suptitle(title, fontsize=12)
+    st = fig.suptitle(title, fontsize=12)
+    extra_artists.append(st)
 
     # Save the plot
     state_key_str = state_key
@@ -677,7 +682,7 @@ def create_combined_summary_plot(dof_results, output_dir, version=""):
     ver_str = f"_{version}" if version else ""
     summary_file = output_dir / f"{state_key_str}_combined_sensitivity_summary_+sim{gd_fn_str}{ver_str}.pdf"
     print(f"  Saving combined summary plot to {summary_file}")
-    plt.savefig(summary_file, dpi=150, bbox_inches='tight')
+    plt.savefig(summary_file, dpi=150, bbox_inches='tight', bbox_extra_artists=extra_artists)
     plt.close(fig)
 
 def find_cached_pkl(fam_files, gd_files, include_gd, state_key_str,
