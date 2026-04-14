@@ -1,5 +1,6 @@
-# ASDF files
+# data files
 **/*.asdf
+**/*.parquet
 
 # PDF files
 **/*.pdf
@@ -10,9 +11,15 @@
 # TXT files
 **/*.txt
 
+# env/workspace files
+.env
+*.code-workspace
+settings.json
+
 # Jupyter notebook checkpoints
 **/.ipynb_checkpoints/
 **/*-checkpoint.ipynb
+**/__pycache__
 
 # output files
 sens_results*/
