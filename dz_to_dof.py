@@ -19,8 +19,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from pathlib import Path
-import galsim
-from lsst.ts.ofc import OFCData # type: ignore
+
+# LSST stack imports are deferred to avoid import errors
+# when the stack is not set up (e.g. during basic tests).
+# Functions that need them import locally.
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -50,19 +52,32 @@ DOF_GROUPS = {
 def load_ofc_data():
     ofc_config_dir = ('/sdf/home/s/schutt20/repos/lsst-ts/'
                       'ts_config_mttcs/MTAOS/v13/ofc')
+    from lsst.ts.ofc import OFCData
     ofc_data = OFCData('lsst', config_dir=ofc_config_dir)
 
     return ofc_data
 
-def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices, renorm=False):
+def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
+    norm_type=None):
     """Load, slice and optionally renormalize the OFC sensitivity matrix.
+
+    Parameters
+    ----------
+    ofc_data : OFCData
+    focal_indices : array_like of int
+    pupil_indices : array_like of int
+    norm_type : str or None
+        Normalization scheme: 'orig', 'geom', or None.
 
     Returns
     -------
     sliced : ndarray, shape (n_focal, n_pupil, n_dof)
     full_coef : ndarray
-        Full DoubleZernike coefficient array (for heatmap plots).
+        Full (unrenormalized) DoubleZernike coefficient array.
+    renorm_full_coef : ndarray or None
+        Full renormalized coefficient array, if norm_type is set.
     """
+    import galsim
     ideal_sens_dz = galsim.zernike.DoubleZernike(
         ofc_data.sensitivity_matrix[..., :],
         uv_inner=ofc_data.config["field"]["radius_inner"],
@@ -73,29 +88,116 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices, renorm=False
     full_coef = ideal_sens_dz.coef
     print(f"Full sensitivity matrix shape: {full_coef.shape}")
 
-    renorm_full_coef = renormalize_sensitivity_matrix(
-        ofc_data, full_coef) if renorm else None
+    if norm_type is not None:
+        renorm_full_coef = renormalize_sensitivity_matrix(
+            ofc_data, full_coef, norm_type
+        )
+    else:
+        renorm_full_coef = None
 
-    sliced = slice_sensitivity_matrix(renorm_full_coef if renorm else full_coef,
-                                      focal_indices, pupil_indices)
+    sliced = slice_sensitivity_matrix(
+        renorm_full_coef if renorm_full_coef is not None else full_coef,
+        focal_indices, pupil_indices
+    )
     print(f"Sliced sensitivity matrix shape: {sliced.shape}")
     return sliced, full_coef, renorm_full_coef
 
-def renormalize_sensitivity_matrix(ofc_data, smatrix, dof_idx=range(50)):
+def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
+    dof_indices=range(50)):
 
-    # The normalization is defined in Eqs 9-11 of
-    # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
+    if norm_type == "orig":
+        # The normalization is defined in Eqs 9-11 of
+        # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M 
+        norm_matrix = np.diag(ofc_data.normalization_weights[dof_indices])
+    elif norm_type == "geom":
+        r_i, f_i, _ = get_rf_weights(ofc_data, orig_smatrix, dof_indices)
+        norm_matrix = np.diag(np.sqrt(r_i / f_i))
+    elif norm_type is None:
+        norm_matrix = np.diag(np.ones_like(dof_indices))
 
-    norm_matrix = np.diag(ofc_data.normalization_weights[dof_idx])
-    renorm_smatrix = smatrix @ norm_matrix
+    return orig_smatrix @ norm_matrix
 
-    return renorm_smatrix
+def reverse_normalization(ofc_data, dof_vector, norm_type,
+    orig_smatrix=None, dof_indices=range(50)):
+    """Reverse normalization of DOF vector to physical units.
 
-def reverse_normalization(ofc_data, dof_vector, dof_idx=range(50)):
-    """Reverses normalization of DOF vector."""
-    norm_vector = ofc_data.normalization_weights[dof_idx]
-    print('Renorm weights:', norm_vector)
+    Must use the same norm_type and orig_smatrix that were
+    passed to renormalize_sensitivity_matrix.
+    """
+    if norm_type == "orig":
+        # The normalization is defined in Eqs 9-11 of
+        # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
+        norm_vector = ofc_data.normalization_weights[dof_indices]
+    elif norm_type == "geom":
+        if orig_smatrix is None:
+            raise ValueError(
+                "orig_smatrix is required for geom normalization"
+            )
+        r_vec, f_vec, _ = get_rf_weights(ofc_data, orig_smatrix, dof_indices)
+        norm_vector = np.sqrt(r_vec / f_vec)
+    elif norm_type is None:
+        norm_vector = np.ones(len(dof_indices))
+
+    print('renorm weights:', norm_vector)
     return dof_vector * norm_vector
+
+def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(50)):
+
+    from lsst.ts.ofc import BendModeToForce
+    from lsst.ts.wep.utils import convertZernikesToPsfWidth
+
+    # compute range weights r_i
+    m1m3_bending_range = ofc_data.m1m3_force_range / 20
+    m2_bending_range = ofc_data.m2_force_range / 20
+    m1m3_bmf = BendModeToForce('M1M3', ofc_data)
+    m2_bmf = BendModeToForce('M2', ofc_data)
+
+    range_weights_50 = np.concatenate((
+        ofc_data.rb_stroke,
+        m1m3_bending_range / np.max(np.abs(m1m3_bmf.rot_mat), axis=0),
+        m2_bending_range / np.max(np.abs(m2_bmf.rot_mat), axis=0),
+    ))
+
+    # Compute FWHM weights f_i
+    fwhm_matrix = np.zeros(sensitivity_matrix.shape)
+    for idy in range(sensitivity_matrix.shape[0]):
+        fwhm_matrix[idy, ...] = convertZernikesToPsfWidth(
+            sensitivity_matrix[idy, ...].T).T
+    fwhm_matrix_2d = fwhm_matrix.reshape((-1, fwhm_matrix.shape[2]))
+    fwhm_weights_50 = np.zeros(50)
+    for i in range(50):
+        fwhm_weights_50[i] = np.sqrt(np.sum(np.square(fwhm_matrix_2d[:, i])))
+
+    # Extract for our DOFs
+    r_i = range_weights_50[dof_indices]
+    f_i = fwhm_weights_50[dof_indices]
+    n_default = ofc_data.normalization_weights[dof_indices]
+    dof_names = [DOF_LABELS[i] for i in dof_indices]
+
+    # print('Normalization weight components for selected DOFs:')
+    # print(f'{"DOF":>10s} {"r_i (range)":>14s} {"f_i (FWHM)":>14s}'
+    #       f' {"r_i * f_i":>14s} {"n_i (stored)":>14s}')
+    # print('-' * 66)
+    # for idx, name in enumerate(dof_names):
+    #     print(f'{name:>10s} {r_i[idx]:>14.6e} {f_i[idx]:>14.6e}'
+    #           f' {r_i[idx]*f_i[idx]:>14.6e} {n_default[idx]:>14.6e}')
+
+    # print(f'\nPhysical interpretation:')
+    # for idx, name in enumerate(dof_names):
+    #     print(f'  {name}: range = {r_i[idx]:.4f} (physical stroke), '
+    #         f'FWHM sensitivity = {f_i[idx]:.4f} arcsec FWHM/unit DOF')
+
+    # Derive stored f_i from stored normalization weights and computed r_i
+    f_i_stored = n_default / r_i
+
+    print(f'\nStored vs computed FWHM weights:')
+    print(f'{"DOF":>10s} {"f_i (computed)":>16s} {"f_i (stored)":>16s} {"ratio":>10s}')
+    print('-' * 56)
+    for idx, name in enumerate(dof_names):
+        ratio = f_i[idx] / f_i_stored[idx] if f_i_stored[idx] != 0 else float('inf')
+        print(f'{name:>10s} {f_i[idx]:>16.6e} {f_i_stored[idx]:>16.6e} {ratio:>10.4f}')
+
+    return r_i, f_i, f_i_stored
 
 def slice_sensitivity_matrix(sens_coef, focal_indices, pupil_indices):
     """Select focal and pupil Zernike indices from a full sensitivity tensor.
@@ -754,7 +856,7 @@ def finalize_dof_figure(fig, axes, file_keys, dataset_colors,
 # =========================================================================
 
 def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
-                                  output_path):
+                                  norm_type, output_path):
     """Plot one focal Zernike layer of the sensitivity matrix as a heatmap.
 
     Plots the full (unsliced) layer with all pupil rows.  Rows that are
@@ -829,7 +931,8 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
     plt.colorbar(im_bends, ax=ax_bends, fraction=0.046, pad=0.04).set_label(
         r'$\mu m$ or $\mu m$/arcsec', fontsize=10)
 
-    fig.suptitle(f'Sensitivity Matrix for Focal Zernike $k={{k_index}}$',
+    fig.suptitle(f'Sensitivity Matrix for Focal Zernike $k=${k_index},'
+                 f' Norm: {norm_type}',
                  fontsize=13, y=0.98)
     plt.tight_layout()
     print(f"  Saving sensitivity matrix plot to {output_path}")
@@ -838,7 +941,7 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
 
 
 def plot_all_sensitivity_layers(sensitivity_matrix, pupil_indices, n_focal,
-                                output_dir, version):
+                                norm_type, output_dir, version):
     """Plot all focal Zernike layers of the sensitivity matrix.
 
     Parameters
@@ -852,4 +955,4 @@ def plot_all_sensitivity_layers(sensitivity_matrix, pupil_indices, n_focal,
     for k in range(1, n_focal):
         output_path = output_dir / f'sensitivity_k{k}{version}.png'
         plot_sensitivity_matrix_layer(sensitivity_matrix[k], pupil_indices,
-                                     k, output_path)
+                                     k, norm_type, output_path)

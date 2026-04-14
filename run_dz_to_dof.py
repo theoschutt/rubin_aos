@@ -113,8 +113,9 @@ def main():
     parser.add_argument("--focal_indices", nargs="+", type=int,
                         default=DEFAULT_FOCAL_INDICES,
                         help="Focal Zernike indices to use")
-    parser.add_argument("--renorm", action="store_true",
-                        help="Renormalize the sensitivity matrix")
+    parser.add_argument("--renorm", type=str, default=None,
+                        choices=["orig", "geom"],
+                        help="Normalization scheme for the sensitivity matrix")
     parser.add_argument("--rot_tolerance", type=float, default=1.0,
                         help="Tolerance for grouping rotator angles (degrees)")
     parser.add_argument("--rcond", type=float, default=1e-3,
@@ -151,7 +152,7 @@ def main():
 
     print("\n=== Loading sensitivity matrix ===")
     sliced_smatrix, full_coef, renorm_full_coef = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices, renorm=args.renorm)
+        ofc_data, focal_indices, pupil_indices, norm_type=args.renorm)
     A = build_design_matrix(sliced_smatrix)
     print(f"Design matrix A shape: {A.shape}")
 
@@ -165,7 +166,7 @@ def main():
     smatrix_dir.mkdir(exist_ok=True)
     smatrix_to_plot = renorm_full_coef if args.renorm else full_coef
     plot_all_sensitivity_layers(smatrix_to_plot, pupil_indices, n_focal + 1,
-                                smatrix_dir, ver)
+                                args.renorm, smatrix_dir, ver)
 
     # --- Group by rotator angle ---
     print("\n=== Grouping by rotator angle ===")
@@ -196,8 +197,11 @@ def main():
         dz_residual = dz_data.reshape(-1) - dz_reconstructed
         d_dz_list.append(flat_to_dz_matrix(dz_residual, n_focal, n_pupil))
 
-        x_phys = (reverse_normalization(ofc_data, x_hat)
-                  if args.renorm else x_hat)
+        if args.renorm:
+            x_phys = reverse_normalization(
+                ofc_data, x_hat, args.renorm, full_coef)
+        else:
+            x_phys = x_hat
         dof_hat_list.append(x_phys)
 
         print(f"\n  {rotang}: rank={rank}, "
@@ -210,7 +214,7 @@ def main():
     print("\n=== Generating plots ===")
     colors = plt.cm.tab10.colors[:len(rotang_labels)]
 
-    renorm_str = ", smatrix renormed" if args.renorm else ""
+    renorm_str = f", Norm: {args.renorm}"
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
         f"Reconstructed DOFs from median DZ coeffs{renorm_str} {dates}",
