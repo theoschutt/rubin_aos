@@ -10,6 +10,8 @@ from dz_to_dof import (
     flat_to_dz_matrix,
     group_by_tolerance,
     make_dz_column_names,
+    renormalize_sensitivity_matrix,
+    reverse_normalization,
     solve_dof,
     DOF_LABELS,
     N_DOF,
@@ -108,3 +110,118 @@ def test_dof_labels():
     assert DOF_LABELS[10] == "M1M3_B1"
     assert DOF_LABELS[30] == "M2_B1"
     assert DOF_LABELS[49] == "M2_B20"
+
+
+@pytest.fixture(scope="module")
+def ofc_data():
+    """Load real OFCData once for all renorm tests."""
+    from dz_to_dof import load_ofc_data
+    return load_ofc_data()
+
+
+def test_renorm_orig_roundtrip(ofc_data):
+    """renormalize then reverse with 'orig' recovers
+    the same physical DOFs as solving unnormalized."""
+    n_focal, n_pupil = 6, 21
+    focal_indices = list(range(1, 7))
+    pupil_indices = ([4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                      14, 15, 16, 17, 18, 19,
+                      22, 23, 24, 25, 26])
+
+    from dz_to_dof import (
+        load_sensitivity_matrix,
+    )
+    # Load with and without normalization
+    sliced_orig, full, _ = load_sensitivity_matrix(
+        ofc_data, focal_indices, pupil_indices,
+        norm_type=None)
+    sliced_renorm, _, _ = load_sensitivity_matrix(
+        ofc_data, focal_indices, pupil_indices,
+        norm_type="orig")
+
+    A_orig = build_design_matrix(sliced_orig)
+    A_renorm = build_design_matrix(sliced_renorm)
+
+    # Synthesize DZ data from known physical DOFs
+    rng = np.random.default_rng(42)
+    x_true = rng.standard_normal(N_DOF)
+    y = A_orig @ x_true
+    dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
+
+    # Solve unnormalized
+    x_direct, _, _, _ = solve_dof(A_orig, dz_mat, rcond=None)
+
+    # Solve normalized then reverse
+    x_renorm, _, _, _ = solve_dof(A_renorm, dz_mat, rcond=None)
+    x_recovered = reverse_normalization(
+        ofc_data, x_renorm, "orig")
+
+    # 'orig' weights span ~5 decades (68 to 0.001),
+    # so the two solve paths diverge at ~1e-7.
+    np.testing.assert_allclose(
+        x_recovered, x_direct, atol=1e-6)
+    np.testing.assert_allclose(
+        x_recovered, x_true, atol=1e-6)
+
+
+def test_renorm_geom_roundtrip(ofc_data):
+    """renormalize then reverse with 'geom' recovers
+    the same physical DOFs as solving unnormalized."""
+    n_focal, n_pupil = 6, 21
+    focal_indices = list(range(1, 7))
+    pupil_indices = ([4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                      14, 15, 16, 17, 18, 19,
+                      22, 23, 24, 25, 26])
+
+    from dz_to_dof import (
+        load_sensitivity_matrix,
+    )
+    # Load with and without normalization
+    sliced_orig, full, _ = load_sensitivity_matrix(
+        ofc_data, focal_indices, pupil_indices,
+        norm_type=None)
+    sliced_renorm, _, _ = load_sensitivity_matrix(
+        ofc_data, focal_indices, pupil_indices,
+        norm_type="geom")
+
+    A_orig = build_design_matrix(sliced_orig)
+    A_renorm = build_design_matrix(sliced_renorm)
+
+    # Synthesize DZ data from known physical DOFs
+    rng = np.random.default_rng(42)
+    x_true = rng.standard_normal(N_DOF)
+    y = A_orig @ x_true
+    dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
+
+    # Solve unnormalized
+    x_direct, _, _, _ = solve_dof(A_orig, dz_mat, rcond=None)
+
+    # Solve normalized then reverse
+    x_renorm, _, _, _ = solve_dof(A_renorm, dz_mat, rcond=None)
+    x_recovered = reverse_normalization(
+        ofc_data, x_renorm, "geom", full)
+
+    np.testing.assert_allclose(
+        x_recovered, x_direct, atol=1e-10)
+    np.testing.assert_allclose(
+        x_recovered, x_true, atol=1e-10)
+
+
+def test_renorm_none_is_identity(ofc_data):
+    """norm_type=None leaves smatrix unchanged."""
+    focal_indices = list(range(1, 7))
+    pupil_indices = [4, 5, 6, 7, 8, 9]
+
+    from dz_to_dof import load_sensitivity_matrix
+    sliced_none, full, _ = load_sensitivity_matrix(
+        ofc_data, focal_indices, pupil_indices,
+        norm_type=None)
+
+    renormed = renormalize_sensitivity_matrix(
+        ofc_data, full, None)
+    np.testing.assert_array_equal(full, renormed)
+
+    x = np.ones(N_DOF)
+    x_back = reverse_normalization(
+        ofc_data, x, None)
+    np.testing.assert_array_equal(x, x_back)
