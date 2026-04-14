@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from dz_to_dof import (
+    DZtoDOFSolver,
     build_design_matrix,
     columns_to_dz_matrix,
     dz_matrix_to_flat,
@@ -225,3 +226,81 @@ def test_renorm_none_is_identity(ofc_data):
     x_back = reverse_normalization(
         ofc_data, x, None)
     np.testing.assert_array_equal(x, x_back)
+
+
+# ---- DZtoDOFSolver tests (synthetic data) ----
+
+def test_solver_roundtrip():
+    """Solver recovers known DOFs with all 50."""
+    n_focal, n_pupil, n_dof = 6, 21, 50
+    rng = np.random.default_rng(99)
+    smatrix = rng.standard_normal(
+        (n_focal, n_pupil, n_dof))
+    A = build_design_matrix(smatrix)
+    solver = DZtoDOFSolver._from_components(
+        A, n_focal, n_pupil)
+
+    x_true = rng.standard_normal(n_dof)
+    y = A @ x_true
+    dz_mat = flat_to_dz_matrix(
+        y, n_focal, n_pupil)
+
+    result = solver.solve(dz_mat)
+    np.testing.assert_allclose(
+        result["x_hat"], x_true, atol=1e-10)
+
+
+def test_solver_dof_subset():
+    """Subset solver recovers signal that lives
+    entirely in the subset."""
+    n_focal, n_pupil, n_dof = 6, 21, 50
+    rng = np.random.default_rng(77)
+    smatrix = rng.standard_normal(
+        (n_focal, n_pupil, n_dof))
+    A_full = build_design_matrix(smatrix)
+
+    # Signal only in DOFs 0-9 (hexapods)
+    subset = list(range(10))
+    x_true = np.zeros(n_dof)
+    x_true[subset] = rng.standard_normal(
+        len(subset))
+
+    y = A_full @ x_true
+    dz_mat = flat_to_dz_matrix(
+        y, n_focal, n_pupil)
+
+    A_sub = build_design_matrix(
+        smatrix[:, :, subset])
+    solver = DZtoDOFSolver._from_components(
+        A_sub, n_focal, n_pupil,
+        dof_indices=subset)
+
+    result = solver.solve(dz_mat)
+    # Subset DOFs recovered exactly
+    np.testing.assert_allclose(
+        result["x_hat"][subset],
+        x_true[subset], atol=1e-10)
+    # Excluded DOFs are zero
+    excluded = list(range(10, 50))
+    np.testing.assert_array_equal(
+        result["x_hat"][excluded], 0.0)
+
+
+def test_solver_residual_identity():
+    """reconstructed + residual == input."""
+    n_focal, n_pupil, n_dof = 6, 21, 50
+    rng = np.random.default_rng(55)
+    smatrix = rng.standard_normal(
+        (n_focal, n_pupil, n_dof))
+    A = build_design_matrix(smatrix)
+    solver = DZtoDOFSolver._from_components(
+        A, n_focal, n_pupil)
+
+    dz_mat = rng.standard_normal(
+        (n_focal, n_pupil))
+    result = solver.solve(dz_mat)
+
+    recovered = (result["dz_reconstructed"]
+                 + result["dz_residual"])
+    np.testing.assert_allclose(
+        recovered, dz_mat, atol=1e-14)

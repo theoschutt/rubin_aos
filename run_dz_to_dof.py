@@ -17,7 +17,8 @@ Usage
     python run_dz_to_dof.py /path/to/dz_coefficients.parquet \\
         [--pupil_indices 4 5 6 ... 19 22 23 24 25 26] \\
         [--focal_indices 1 2 3 4 5 6] \\
-        [--rot_tolerance 1.0] [--rcond 1e-3] \\
+        [--dof_indices 0 1 2 ...] \\
+        [--rot_tolerance 1.0] \\
         [-o output_dir] [--version v1]
 """
 import argparse
@@ -27,14 +28,12 @@ from pathlib import Path
 from astropy.table import QTable
 
 from dz_to_dof import (
+    DZtoDOFSolver,
+    compact_index_str,
     load_ofc_data,
-    load_sensitivity_matrix,
-    reverse_normalization,
-    build_design_matrix,
     make_dz_column_names,
     median_per_group,
-    solve_dof,
-    flat_to_dz_matrix,
+    dz_matrix_to_flat,
     group_by_tolerance,
     print_dofs,
     print_residuals,
@@ -113,13 +112,14 @@ def main():
     parser.add_argument("--focal_indices", nargs="+", type=int,
                         default=DEFAULT_FOCAL_INDICES,
                         help="Focal Zernike indices to use")
+    parser.add_argument("--dof_indices", nargs="+", type=int,
+                        default=None,
+                        help="DOF indices (0-49) to solve. [default: [0-49]]")
     parser.add_argument("--renorm", type=str, default=None,
                         choices=["orig", "geom"],
                         help="Normalization scheme for the sensitivity matrix")
     parser.add_argument("--rot_tolerance", type=float, default=1.0,
                         help="Tolerance for grouping rotator angles (degrees)")
-    parser.add_argument("--rcond", type=float, default=1e-3,
-                        help="Cutoff for small singular values in lstsq")
     parser.add_argument("-o", "--output", default="dz_to_dof_results",
                         help="Output directory")
     parser.add_argument("--version", type=str, default="",
@@ -150,11 +150,12 @@ def main():
     print("\n=== Loading OFCData ===")
     ofc_data = load_ofc_data()
 
-    print("\n=== Loading sensitivity matrix ===")
-    sliced_smatrix, full_coef, renorm_full_coef = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices, norm_type=args.renorm)
-    A = build_design_matrix(sliced_smatrix)
-    print(f"Design matrix A shape: {A.shape}")
+    print("\n=== Building solver ===")
+    solver = DZtoDOFSolver(
+        ofc_data, pupil_indices, focal_indices,
+        dof_indices=args.dof_indices, norm_type=args.renorm,
+    )
+    print(f"Design matrix A shape: {solver.A.shape}")
 
     print("\n=== Loading DZ coefficients ===")
     dz_tab = load_dz_data(args.parquet_file)
@@ -164,9 +165,12 @@ def main():
     print("\n=== Plotting sensitivity matrix ===")
     smatrix_dir = output_dir / "sensitivity_matrix"
     smatrix_dir.mkdir(exist_ok=True)
-    smatrix_to_plot = renorm_full_coef if args.renorm else full_coef
-    plot_all_sensitivity_layers(smatrix_to_plot, pupil_indices, n_focal + 1,
-                                args.renorm, smatrix_dir, ver)
+    smat = (solver.renorm_full_coef if args.renorm
+            else solver.full_coef)
+    plot_all_sensitivity_layers(
+        smat, pupil_indices, n_focal + 1,
+        args.renorm, smatrix_dir, ver,
+    )
 
     # --- Group by rotator angle ---
     print("\n=== Grouping by rotator angle ===")
@@ -175,10 +179,11 @@ def main():
     )
 
     # --- Compute median DZ per group ---
-    print("\n=== Computing median DZ coefficients per group ===")
-    col_names = make_dz_column_names(pupil_indices, focal_indices)
-    dz_arr_list = median_per_group(dz_tab, col_names, rot_groups,
-                                   n_focal, n_pupil)
+    print("\n=== Computing median DZ per group ===")
+    col_names = make_dz_column_names(
+        pupil_indices, focal_indices)
+    dz_arr_list = median_per_group(
+        dz_tab, col_names, rot_groups, n_focal, n_pupil)
 
     # --- Solve for DOFs per group ---
     print("\n=== Solving for DOFs ===")
@@ -187,64 +192,73 @@ def main():
     d_dz_list = []
 
     for rotang, dz_data in zip(rotang_labels, dz_arr_list):
-        x_hat, _, rank, _ = solve_dof(A, dz_data, rcond=args.rcond)
+        result = solver.solve(dz_data)
+        dof_hat_list.append(result["x_hat"])
+        rec_dz_list.append(result["dz_reconstructed"])
+        d_dz_list.append(result["dz_residual"])
 
-
-        dz_reconstructed = A @ x_hat
-        rec_dz_list.append(flat_to_dz_matrix(dz_reconstructed,
-                                             n_focal, n_pupil))
-
-        dz_residual = dz_data.reshape(-1) - dz_reconstructed
-        d_dz_list.append(flat_to_dz_matrix(dz_residual, n_focal, n_pupil))
-
-        if args.renorm:
-            x_phys = reverse_normalization(
-                ofc_data, x_hat, args.renorm, full_coef)
-        else:
-            x_phys = x_hat
-        dof_hat_list.append(x_phys)
-
-        print(f"\n  {rotang}: rank={rank}, "
-              f"RMS residual={np.sqrt(np.mean(dz_residual**2)):.6f}")
-        print_dofs(x_phys)
+        rms = np.sqrt(np.mean(result["dz_residual"]**2))
+        print(f"\n  {rotang}: rank={result['rank']}, "
+              f"RMS residual={rms:.6f}")
+        print_dofs(result["x_hat"])
         print()
-        print_residuals(dz_residual, focal_indices, pupil_indices)
+        print_residuals(
+            dz_matrix_to_flat(result["dz_residual"]),
+            focal_indices, pupil_indices,
+        )
 
     # --- Plots ---
     print("\n=== Generating plots ===")
     colors = plt.cm.tab10.colors[:len(rotang_labels)]
 
     renorm_str = f", Norm: {args.renorm}"
+    zk_str = (f"focal k={compact_index_str(focal_indices)}"
+              f", pupil j={compact_index_str(pupil_indices)}")
+    if args.dof_indices is not None:
+        dof_str = (f"{compact_index_str(args.dof_indices)}")
+    else:
+        dof_str = "[1-50]"
+
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
-        f"Reconstructed DOFs from median DZ coeffs{renorm_str} {dates}",
+        (f"Reconstructed DOFs from median DZ "
+         f"coeffs{renorm_str}\n Dates: {dates}\n{zk_str}"),
         output_dir / f"dof_solution{ver}.pdf",
+        dof_indices=args.dof_indices,
     )
 
     plot_dz_datasets(
-        dz_arr_list, pupil_indices, rotang_labels, colors,
-        f"DZ Coefficients {dates}",
+        dz_arr_list, pupil_indices,
+        rotang_labels, colors,
+        f"DZ Coefficients\nDates: {dates}",
         output_dir / f"dz_coefficients{ver}.pdf",
     )
 
     plot_dz_datasets(
-        rec_dz_list, pupil_indices, rotang_labels, colors,
-        f"Reconstructed DZ Coefficients{renorm_str} {dates}",
+        rec_dz_list, pupil_indices,
+        rotang_labels, colors,
+        (f"Reconstructed DZ Coefficients"
+         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_reconstructed{ver}.pdf",
     )
 
     plot_dz_datasets(
-        d_dz_list, pupil_indices, rotang_labels, colors,
-        f"DZ Coefficient Residuals{renorm_str} {dates}",
+        d_dz_list, pupil_indices,
+        rotang_labels, colors,
+        (f"DZ Coefficient Residuals"
+         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
     )
 
     # better viz for relative contributions
     plot_dz_datasets(
-        d_dz_list, pupil_indices, rotang_labels, colors,
-        f"DZ Coefficient Residuals{renorm_str} {dates}",
-        output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
-        fixed_y=True
+        d_dz_list, pupil_indices,
+        rotang_labels, colors,
+        (f"DZ Coefficient Residuals"
+         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
+        output_dir
+        / f"dz_residuals_fixed_ylims{ver}.pdf",
+        fixed_y=True,
     )
 
     print(f"\nAll output saved to {output_dir}")

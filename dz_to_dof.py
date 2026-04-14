@@ -38,12 +38,192 @@ DOF_LABELS = (
 
 N_DOF = len(DOF_LABELS)
 
-DOF_GROUPS = {
-    "M2 hexapod":  slice(0, 5),
-    "Cam hexapod": slice(5, 10),
-    "M1M3 bends":  slice(10, 30),
-    "M2 bends":    slice(30, 50),
-}
+
+def compact_index_str(indices):
+    """Format a sorted list of ints as compact
+    range notation, e.g. [4-19,22-26]."""
+    if not indices:
+        return "[]"
+    s = sorted(indices)
+    ranges = []
+    start = end = s[0]
+    for v in s[1:]:
+        if v == end + 1:
+            end = v
+        else:
+            if start == end:
+                ranges.append(f"{start}")
+            else:
+                ranges.append(f"{start}-{end}")
+            start = end = v
+    if start == end:
+        ranges.append(f"{start}")
+    else:
+        ranges.append(f"{start}-{end}")
+    return "[" + ",".join(ranges) + "]"
+
+
+# =========================================================================
+# Solver class
+# =========================================================================
+
+class DZtoDOFSolver:
+    """Configurable solver for the DZ-to-DOF
+    inversion problem.
+
+    Bundles OFC data, Zernike index choices,
+    DOF subset selection, and normalization into
+    a single object whose ``solve`` method returns
+    results compatible with the plotting functions.
+
+    Parameters
+    ----------
+    ofc_data : OFCData
+    pupil_indices : list of int
+        Pupil Zernike indices to use.
+    focal_indices : list of int
+        Focal Zernike indices to use.
+    dof_indices : list of int or None
+        Which of the 50 DOFs to solve for.
+        ``None`` means all 50.
+    norm_type : str or None
+        ``'orig'``, ``'geom'``, or ``None``.
+    """
+
+    def __init__(
+        self,
+        ofc_data,
+        pupil_indices,
+        focal_indices,
+        dof_indices=None,
+        norm_type=None,
+    ):
+        self.ofc_data = ofc_data
+        self.pupil_indices = list(pupil_indices)
+        self.focal_indices = list(focal_indices)
+        self.norm_type = norm_type
+        self.n_focal = len(focal_indices)
+        self.n_pupil = len(pupil_indices)
+
+        if dof_indices is None:
+            self.dof_indices = np.arange(N_DOF)
+        else:
+            self.dof_indices = np.asarray(
+                dof_indices
+            )
+
+        # Load, normalize, and slice the
+        # sensitivity matrix (full 50 DOFs).
+        sliced, full_coef, renorm_full = (
+            load_sensitivity_matrix(
+                ofc_data,
+                focal_indices,
+                pupil_indices,
+                norm_type=norm_type,
+            )
+        )
+        self.full_coef = full_coef
+        self.renorm_full_coef = renorm_full
+        # Keep the full-DOF sliced version
+        # for sensitivity matrix plots.
+        self.sliced_smatrix = sliced
+
+        # Slice DOF axis for the subset.
+        sliced_subset = sliced[
+            :, :, self.dof_indices
+        ]
+        self.A = build_design_matrix(
+            sliced_subset
+        )
+
+    def solve(self, dz_matrix):
+        """Solve for DOFs from a DZ matrix.
+
+        Parameters
+        ----------
+        dz_matrix : ndarray, shape
+            (n_focal, n_pupil)
+
+        Returns
+        -------
+        dict with keys ``'x_hat'``,
+            ``'dz_reconstructed'``,
+            ``'dz_residual'``, ``'rank'``,
+            ``'singular_values'``.
+        """
+        x_sub, _, rank, svals = solve_dof(
+            self.A, dz_matrix, rcond=1e-3
+        )
+
+        recon_flat = self.A @ x_sub
+        dz_recon = flat_to_dz_matrix(
+            recon_flat,
+            self.n_focal,
+            self.n_pupil,
+        )
+
+        resid_flat = (
+            dz_matrix_to_flat(dz_matrix)
+            - recon_flat
+        )
+        dz_resid = flat_to_dz_matrix(
+            resid_flat,
+            self.n_focal,
+            self.n_pupil,
+        )
+
+        # Reverse normalization on the subset.
+        if self.norm_type is not None:
+            x_phys_sub = reverse_normalization(
+                self.ofc_data,
+                x_sub,
+                self.norm_type,
+                self.full_coef,
+                self.dof_indices,
+            )
+        else:
+            x_phys_sub = x_sub
+
+        # Expand to full 50-element vector.
+        x_hat = np.zeros(N_DOF)
+        x_hat[self.dof_indices] = x_phys_sub
+
+        return {
+            "x_hat": x_hat,
+            "dz_reconstructed": dz_recon,
+            "dz_residual": dz_resid,
+            "rank": rank,
+            "singular_values": svals,
+        }
+
+    @classmethod
+    def _from_components(
+        cls, A, n_focal, n_pupil,
+        dof_indices=None,
+    ):
+        """Build from a pre-computed design
+        matrix.  For testing; no normalization.
+        """
+        solver = cls.__new__(cls)
+        if dof_indices is None:
+            solver.dof_indices = np.arange(
+                A.shape[1]
+            )
+        else:
+            solver.dof_indices = np.asarray(
+                dof_indices
+            )
+        solver.A = A
+        solver.n_focal = n_focal
+        solver.n_pupil = n_pupil
+        solver.norm_type = None
+        solver.ofc_data = None
+        solver.full_coef = None
+        solver.renorm_full_coef = None
+        solver.sliced_smatrix = None
+        solver.pupil_indices = []
+        solver.focal_indices = []
+        return solver
 
 
 # =========================================================================
@@ -763,8 +943,10 @@ def setup_dof_figure(n_datasets):
     return fig, axes, dataset_width
 
 
-def plot_dof_vector(ax, x_positions, values, dataset_idx, dataset_width,
-                    color, marker='o'):
+def plot_dof_vector(ax, x_positions, values,
+                    dataset_idx, dataset_width,
+                    color, marker='o',
+                    fillstyle='full'):
     """Plot DOF values at staggered x positions.
 
     Parameters
@@ -776,47 +958,91 @@ def plot_dof_vector(ax, x_positions, values, dataset_idx, dataset_width,
     dataset_width : float
     color : color
     marker : str
+    fillstyle : str
+        ``'full'`` for solved DOFs,
+        ``'none'`` for excluded DOFs.
     """
     x_offset = (dataset_idx - 0.5) * dataset_width - 0.25
     x_plot = np.array(x_positions) + x_offset
     ax.plot(x_plot, values, marker=marker, color=color,
-            linestyle='none', markersize=6)
+            linestyle='none', markersize=6,
+            fillstyle=fillstyle)
 
 
-def plot_dof_datasets(x_hat_list, file_keys, dataset_colors, title, output_path):
+def plot_dof_datasets(x_hat_list, file_keys,
+                      dataset_colors, title,
+                      output_path, dof_indices=None):
     """Plot multiple DOF solution vectors.
 
     Parameters
     ----------
     x_hat_list : list of array_like
         Each array is a 50-element DOF vector.
-        Order: [M2_hex(5), Cam_hex(5), M1M3_bends(20), M2_bends(20)].
+        Order: [M2_hex(5), Cam_hex(5),
+        M1M3_bends(20), M2_bends(20)].
     file_keys : list of str
     dataset_colors : list of colors
     title : str
     output_path : Path
+    dof_indices : array_like of int or None
+        DOFs that were solved.  Excluded DOFs
+        are drawn with open markers.
     """
     n_datasets = len(x_hat_list)
     fig, axes, dataset_width = setup_dof_figure(n_datasets)
 
-    for dataset_idx, (x_hat, color) in enumerate(zip(x_hat_list, dataset_colors)):
+    # Map subplot positions → DOF indices.
+    # xyz: [Cam_z, Cam_x, Cam_y, M2_z, M2_x, M2_y]
+    #   → DOF [5, 6, 7, 0, 1, 2]
+    # rxry: [Cam_rx, Cam_ry, M2_rx, M2_ry]
+    #   → DOF [8, 9, 3, 4]
+    xyz_dof_ids = [5, 6, 7, 0, 1, 2]
+    rxry_dof_ids = [8, 9, 3, 4]
+    m1m3_dof_ids = list(range(10, 30))
+    m2_dof_ids = list(range(30, 50))
+    dof_set = (
+        set(dof_indices)
+        if dof_indices is not None
+        else set(range(N_DOF))
+    )
+
+    for dataset_idx, (x_hat, color) in enumerate(
+        zip(x_hat_list, dataset_colors)
+    ):
         m2_hex = x_hat[0:5]
         cam_hex = x_hat[5:10]
         m1m3_bends = x_hat[10:30]
         m2_bends = x_hat[30:50]
 
-        xyz_values = np.concatenate([cam_hex[0:3], m2_hex[0:3]])
-        plot_dof_vector(axes['xyz'], range(6), xyz_values,
-                        dataset_idx, dataset_width, color)
+        xyz_values = np.concatenate(
+            [cam_hex[0:3], m2_hex[0:3]])
+        rxry_values = (np.concatenate(
+            [cam_hex[3:5], m2_hex[3:5]]) * 3600)
 
-        rxry_values = np.concatenate([cam_hex[3:5], m2_hex[3:5]]) * 3600
-        plot_dof_vector(axes['rxry'], range(4), rxry_values,
-                        dataset_idx, dataset_width, color)
-
-        plot_dof_vector(axes['m1m3_bends'], range(20), m1m3_bends,
-                        dataset_idx, dataset_width, color)
-        plot_dof_vector(axes['m2_bends'], range(20), m2_bends,
-                        dataset_idx, dataset_width, color)
+        groups = [
+            ('xyz', xyz_dof_ids, xyz_values),
+            ('rxry', rxry_dof_ids, rxry_values),
+            ('m1m3_bends', m1m3_dof_ids,
+             m1m3_bends),
+            ('m2_bends', m2_dof_ids, m2_bends),
+        ]
+        for key, dof_ids, vals in groups:
+            inc = [i for i, d
+                   in enumerate(dof_ids)
+                   if d in dof_set]
+            exc = [i for i, d
+                   in enumerate(dof_ids)
+                   if d not in dof_set]
+            if inc:
+                plot_dof_vector(
+                    axes[key], inc, vals[inc],
+                    dataset_idx, dataset_width,
+                    color)
+            if exc:
+                plot_dof_vector(
+                    axes[key], exc, vals[exc],
+                    dataset_idx, dataset_width,
+                    color, fillstyle='none')
 
     finalize_dof_figure(fig, axes, file_keys, dataset_colors, title, output_path)
 
