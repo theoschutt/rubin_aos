@@ -68,12 +68,10 @@ def compact_index_str(indices):
 # =========================================================================
 
 class DZtoDOFSolver:
-    """Configurable solver for the DZ-to-DOF
-    inversion problem.
+    """Configurable solver for the DZ-to-DOF inversion problem.
 
-    Bundles OFC data, Zernike index choices,
-    DOF subset selection, and normalization into
-    a single object whose ``solve`` method returns
+    Bundles OFC data, Zernike index choices, DOF subset selection,
+    and normalization into a single object whose ``solve`` method returns
     results compatible with the plotting functions.
 
     Parameters
@@ -108,12 +106,9 @@ class DZtoDOFSolver:
         if dof_indices is None:
             self.dof_indices = np.arange(N_DOF)
         else:
-            self.dof_indices = np.asarray(
-                dof_indices
-            )
+            self.dof_indices = np.asarray(dof_indices)
 
-        # Load, normalize, and slice the
-        # sensitivity matrix (full 50 DOFs).
+        # Load, normalize, and slice the sensitivity matrix (full 50 DOFs).
         sliced, full_coef, renorm_full = (
             load_sensitivity_matrix(
                 ofc_data,
@@ -124,17 +119,11 @@ class DZtoDOFSolver:
         )
         self.full_coef = full_coef
         self.renorm_full_coef = renorm_full
-        # Keep the full-DOF sliced version
-        # for sensitivity matrix plots.
         self.sliced_smatrix = sliced
 
         # Slice DOF axis for the subset.
-        sliced_subset = sliced[
-            :, :, self.dof_indices
-        ]
-        self.A = build_design_matrix(
-            sliced_subset
-        )
+        sliced_subset = sliced[:, :, self.dof_indices]
+        self.A = build_design_matrix(sliced_subset)
 
     def solve(self, dz_matrix):
         """Solve for DOFs from a DZ matrix.
@@ -146,31 +135,17 @@ class DZtoDOFSolver:
 
         Returns
         -------
-        dict with keys ``'x_hat'``,
-            ``'dz_reconstructed'``,
-            ``'dz_residual'``, ``'rank'``,
-            ``'singular_values'``.
+        dict with keys ``'x_hat'``, ``'dz_reconstructed'``,
+            ``'dz_residual'``, ``'rank'``, ``'singular_values'``.
         """
-        x_sub, _, rank, svals = solve_dof(
-            self.A, dz_matrix, rcond=1e-3
-        )
+        x_sub, _, rank, svals = solve_dof(self.A, dz_matrix, rcond=1e-3)
 
         recon_flat = self.A @ x_sub
-        dz_recon = flat_to_dz_matrix(
-            recon_flat,
-            self.n_focal,
-            self.n_pupil,
-        )
+        dz_recon = flat_to_dz_matrix(recon_flat, self.n_focal, self.n_pupil)
 
-        resid_flat = (
-            dz_matrix_to_flat(dz_matrix)
-            - recon_flat
-        )
-        dz_resid = flat_to_dz_matrix(
-            resid_flat,
-            self.n_focal,
-            self.n_pupil,
-        )
+        resid_flat = dz_matrix_to_flat(dz_matrix) - recon_flat
+
+        dz_resid = flat_to_dz_matrix(resid_flat, self.n_focal, self.n_pupil)
 
         # Reverse normalization on the subset.
         if self.norm_type is not None:
@@ -206,13 +181,9 @@ class DZtoDOFSolver:
         """
         solver = cls.__new__(cls)
         if dof_indices is None:
-            solver.dof_indices = np.arange(
-                A.shape[1]
-            )
+            solver.dof_indices = np.arange(A.shape[1])
         else:
-            solver.dof_indices = np.asarray(
-                dof_indices
-            )
+            solver.dof_indices = np.asarray(dof_indices)
         solver.A = A
         solver.n_focal = n_focal
         solver.n_pupil = n_pupil
@@ -978,15 +949,13 @@ def plot_dof_datasets(x_hat_list, file_keys,
     ----------
     x_hat_list : list of array_like
         Each array is a 50-element DOF vector.
-        Order: [M2_hex(5), Cam_hex(5),
-        M1M3_bends(20), M2_bends(20)].
+        Order: [M2_hex(5), Cam_hex(5), M1M3_bends(20), M2_bends(20)].
     file_keys : list of str
     dataset_colors : list of colors
     title : str
     output_path : Path
     dof_indices : array_like of int or None
-        DOFs that were solved.  Excluded DOFs
-        are drawn with open markers.
+        DOFs that were solved.  Excluded DOFs are drawn with open markers.
     """
     n_datasets = len(x_hat_list)
     fig, axes, dataset_width = setup_dof_figure(n_datasets)

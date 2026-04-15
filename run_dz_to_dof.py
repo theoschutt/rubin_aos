@@ -42,8 +42,8 @@ from dz_to_dof import (
     plot_dof_datasets,
 )
 
-DEFAULT_PUPIL_INDICES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
-                         14, 15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
+DEFAULT_PUPIL_INDICES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+                         15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
 DEFAULT_FOCAL_INDICES = [1, 2, 3, 4, 5, 6]
 
 
@@ -165,8 +165,7 @@ def main():
     print("\n=== Plotting sensitivity matrix ===")
     smatrix_dir = output_dir / "sensitivity_matrix"
     smatrix_dir.mkdir(exist_ok=True)
-    smat = (solver.renorm_full_coef if args.renorm
-            else solver.full_coef)
+    smat = solver.renorm_full_coef if args.renorm else solver.full_coef
     plot_all_sensitivity_layers(
         smat, pupil_indices, n_focal + 1,
         args.renorm, smatrix_dir, ver,
@@ -175,13 +174,12 @@ def main():
     # --- Group by rotator angle ---
     print("\n=== Grouping by rotator angle ===")
     rot_groups, rotang_labels = group_by_rotator_angle(
-        dz_tab, tolerance=args.rot_tolerance
-    )
+        dz_tab, tolerance=args.rot_tolerance)
+
 
     # --- Compute median DZ per group ---
     print("\n=== Computing median DZ per group ===")
-    col_names = make_dz_column_names(
-        pupil_indices, focal_indices)
+    col_names = make_dz_column_names(pupil_indices, focal_indices)
     dz_arr_list = median_per_group(
         dz_tab, col_names, rot_groups, n_focal, n_pupil)
 
@@ -256,8 +254,7 @@ def main():
         rotang_labels, colors,
         (f"DZ Coefficient Residuals"
          f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
-        output_dir
-        / f"dz_residuals_fixed_ylims{ver}.pdf",
+        output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
         fixed_y=True,
     )
 
