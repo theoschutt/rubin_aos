@@ -29,38 +29,27 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 DOF_LABELS = (
-    ["M2_hex_z", "M2_hex_x", "M2_hex_y", "M2_hex_rx", "M2_hex_ry",
-     "Cam_hex_z", "Cam_hex_x", "Cam_hex_y", "Cam_hex_rx", "Cam_hex_ry"]
+    ["M2_hex_z", "M2_hex_x", "M2_hex_y",
+     "M2_hex_rx", "M2_hex_ry",
+     "Cam_hex_z", "Cam_hex_x", "Cam_hex_y",
+     "Cam_hex_rx", "Cam_hex_ry"]
     + [f"M1M3_B{i}" for i in range(1, 21)]
+    + ["M1M3_B52"]
     + [f"M2_B{i}" for i in range(1, 21)]
 )
-"""50-element list of DOF names in OFC ordering."""
+"""DOF names in OFC ordering."""
 
 N_DOF = len(DOF_LABELS)
 
-
-def compact_index_str(indices):
-    """Format a sorted list of ints as compact
-    range notation, e.g. [4-19,22-26]."""
-    if not indices:
-        return "[]"
-    s = sorted(indices)
-    ranges = []
-    start = end = s[0]
-    for v in s[1:]:
-        if v == end + 1:
-            end = v
-        else:
-            if start == end:
-                ranges.append(f"{start}")
-            else:
-                ranges.append(f"{start}-{end}")
-            start = end = v
-    if start == end:
-        ranges.append(f"{start}")
-    else:
-        ranges.append(f"{start}-{end}")
-    return "[" + ",".join(ranges) + "]"
+N_HEX = 10
+N_M1M3_BEND = len(
+    [l for l in DOF_LABELS if l.startswith("M1M3_B")]
+)
+N_M2_BEND = len(
+    [l for l in DOF_LABELS if l.startswith("M2_B")]
+)
+IDX_M1M3_START = N_HEX
+IDX_M2_START = N_HEX + N_M1M3_BEND
 
 
 # =========================================================================
@@ -82,8 +71,8 @@ class DZtoDOFSolver:
     focal_indices : list of int
         Focal Zernike indices to use.
     dof_indices : list of int or None
-        Which of the 50 DOFs to solve for.
-        ``None`` means all 50.
+        Which DOFs to solve for.
+        ``None`` means all N_DOF.
     norm_type : str or None
         ``'orig'``, ``'geom'``, or ``None``.
     """
@@ -108,7 +97,7 @@ class DZtoDOFSolver:
         else:
             self.dof_indices = np.asarray(dof_indices)
 
-        # Load, normalize, and slice the sensitivity matrix (full 50 DOFs).
+        # Load, normalize, and slice the sensitivity matrix.
         sliced, full_coef, renorm_full = (
             load_sensitivity_matrix(
                 ofc_data,
@@ -159,7 +148,7 @@ class DZtoDOFSolver:
         else:
             x_phys_sub = x_sub
 
-        # Expand to full 50-element vector.
+        # Expand to full N_DOF-element vector.
         x_hat = np.zeros(N_DOF)
         x_hat[self.dof_indices] = x_phys_sub
 
@@ -254,7 +243,7 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
     return sliced, full_coef, renorm_full_coef
 
 def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
-    dof_indices=range(50)):
+    dof_indices=range(N_DOF)):
 
     if norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
@@ -269,7 +258,7 @@ def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
     return orig_smatrix @ norm_matrix
 
 def reverse_normalization(ofc_data, dof_vector, norm_type,
-    orig_smatrix=None, dof_indices=range(50)):
+    orig_smatrix=None, dof_indices=range(N_DOF)):
     """Reverse normalization of DOF vector to physical units.
 
     Must use the same norm_type and orig_smatrix that were
@@ -292,7 +281,7 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
     print('renorm weights:', norm_vector)
     return dof_vector * norm_vector
 
-def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(50)):
+def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
 
     from lsst.ts.ofc import BendModeToForce
     from lsst.ts.wep.utils import convertZernikesToPsfWidth
@@ -303,7 +292,7 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(50)):
     m1m3_bmf = BendModeToForce('M1M3', ofc_data)
     m2_bmf = BendModeToForce('M2', ofc_data)
 
-    range_weights_50 = np.concatenate((
+    range_weights = np.concatenate((  # all N_DOF weights
         ofc_data.rb_stroke,
         m1m3_bending_range / np.max(np.abs(m1m3_bmf.rot_mat), axis=0),
         m2_bending_range / np.max(np.abs(m2_bmf.rot_mat), axis=0),
@@ -320,8 +309,8 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(50)):
         fwhm_weights_50[i] = np.sqrt(np.sum(np.square(fwhm_matrix_2d[:, i])))
 
     # Extract for our DOFs
-    r_i = range_weights_50[dof_indices]
-    f_i = fwhm_weights_50[dof_indices]
+    r_i = range_weights[dof_indices]
+    f_i = fwhm_weights[dof_indices]
     n_default = ofc_data.normalization_weights[dof_indices]
     dof_names = [DOF_LABELS[i] for i in dof_indices]
 
@@ -588,12 +577,13 @@ def print_dofs(x_hat):
     label_to_value = dict(zip(DOF_LABELS, x_hat))
 
     left_groups = [
-        ("Camera hexapod", DOF_LABELS[5:10]),
-        ("M1M3 bends", DOF_LABELS[10:30]),
+        ("Camera hexapod", DOF_LABELS[5:N_HEX]),
+        ("M1M3 bends",
+         DOF_LABELS[IDX_M1M3_START:IDX_M2_START]),
     ]
     right_groups = [
         ("M2 hexapod", DOF_LABELS[:5]),
-        ("M2 bends", DOF_LABELS[30:50]),
+        ("M2 bends", DOF_LABELS[IDX_M2_START:]),
     ]
 
     left_data = _build_rows(left_groups, label_to_value)
@@ -889,27 +879,35 @@ def setup_dof_figure(n_datasets):
         axes['rxry'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
 
     # M1M3 bending modes
-    axes['m1m3_bends'].set_xticks(range(20))
-    axes['m1m3_bends'].set_xlim(-0.5, 20.-0.5)
-    axes['m1m3_bends'].set_xticklabels([str(i + 1) for i in range(20)])
+    m1m3_lbl = [l.replace("M1M3_", "") for l in DOF_LABELS[IDX_M1M3_START:IDX_M2_START]]
+    axes['m1m3_bends'].set_xticks(range(N_M1M3_BEND))
+    axes['m1m3_bends'].set_xlim(-0.5, N_M1M3_BEND - 0.5)
+    axes['m1m3_bends'].set_xticklabels(m1m3_lbl)
     axes['m1m3_bends'].set_ylabel('DOF Value (μm)', fontsize=10)
     axes['m1m3_bends'].set_title('M1M3 Bending Modes', fontsize=11)
     axes['m1m3_bends'].axhline(0, color='gray', lw=0.5, ls='-')
     axes['m1m3_bends'].grid(True, axis='y', alpha=0.4)
-    for i in range(0, 20, 2):
+    for i in range(0, N_M1M3_BEND, 2):
         axes['m1m3_bends'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
 
     # M2 bending modes
-    axes['m2_bends'].set_xticks(range(20))
-    axes['m2_bends'].set_xlim(-0.5, 20.-0.5)
-    axes['m2_bends'].set_xticklabels([str(i + 1) for i in range(20)])
+    m2_lbl = [l.replace("M2_", "") for l in DOF_LABELS[IDX_M2_START:]]
+    axes['m2_bends'].set_xticks(range(N_M2_BEND))
+    axes['m2_bends'].set_xlim(-0.5, N_M2_BEND - 0.5)
+    axes['m2_bends'].set_xticklabels(m2_lbl)
     axes['m2_bends'].set_xlabel('Bending Mode', fontsize=10)
     axes['m2_bends'].set_ylabel('DOF Value (μm)', fontsize=10)
     axes['m2_bends'].set_title('M2 Bending Modes', fontsize=11)
     axes['m2_bends'].axhline(0, color='gray', lw=0.5, ls='-')
     axes['m2_bends'].grid(True, axis='y', alpha=0.4)
-    for i in range(0, 20, 2):
+    for i in range(0, N_M2_BEND, 2):
         axes['m2_bends'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
+
+    # Shrink M2 subplot so tick spacing matches M1M3
+    p = axes['m1m3_bends'].get_position()
+    q = axes['m2_bends'].get_position()
+    axes['m2_bends'].set_position(
+        [q.x0, q.y0, p.width * N_M2_BEND / N_M1M3_BEND, q.height])
 
     return fig, axes, dataset_width
 
@@ -948,8 +946,7 @@ def plot_dof_datasets(x_hat_list, file_keys,
     Parameters
     ----------
     x_hat_list : list of array_like
-        Each array is a 50-element DOF vector.
-        Order: [M2_hex(5), Cam_hex(5), M1M3_bends(20), M2_bends(20)].
+        Each array is an N_DOF-element DOF vector.
     file_keys : list of str
     dataset_colors : list of colors
     title : str
@@ -967,8 +964,10 @@ def plot_dof_datasets(x_hat_list, file_keys,
     #   → DOF [8, 9, 3, 4]
     xyz_dof_ids = [5, 6, 7, 0, 1, 2]
     rxry_dof_ids = [8, 9, 3, 4]
-    m1m3_dof_ids = list(range(10, 30))
-    m2_dof_ids = list(range(30, 50))
+    m1m3_dof_ids = list(range(
+        IDX_M1M3_START, IDX_M2_START))
+    m2_dof_ids = list(range(
+        IDX_M2_START, N_DOF))
     dof_set = (
         set(dof_indices)
         if dof_indices is not None
@@ -979,9 +978,10 @@ def plot_dof_datasets(x_hat_list, file_keys,
         zip(x_hat_list, dataset_colors)
     ):
         m2_hex = x_hat[0:5]
-        cam_hex = x_hat[5:10]
-        m1m3_bends = x_hat[10:30]
-        m2_bends = x_hat[30:50]
+        cam_hex = x_hat[5:N_HEX]
+        m1m3_bends = x_hat[
+            IDX_M1M3_START:IDX_M2_START]
+        m2_bends = x_hat[IDX_M2_START:]
 
         xyz_values = np.concatenate(
             [cam_hex[0:3], m2_hex[0:3]])
@@ -1075,8 +1075,9 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
     m2_rxy = sensitivity_layer[:, 3:5] / 3600.0
     cam_xyz = sensitivity_layer[:, 5:8]
     cam_rxy = sensitivity_layer[:, 8:10] / 3600.0
-    m1m3_bends = sensitivity_layer[:, 10:30]
-    m2_bends = sensitivity_layer[:, 30:50]
+    m1m3_bends = sensitivity_layer[
+        :, IDX_M1M3_START:IDX_M2_START]
+    m2_bends = sensitivity_layer[:, IDX_M2_START:]
 
     fig, (ax_hex, ax_bends) = plt.subplots(
         1, 2, figsize=(16, max(6, n_pupil_full * 0.3)),
@@ -1100,13 +1101,25 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
     abs_max = np.max(np.abs(bends_data))
     im_bends = ax_bends.imshow(bends_data, aspect='auto', cmap='RdBu_r',
                                vmin=-abs_max, vmax=abs_max, interpolation='nearest')
-    bend_labels = ([f'$B_{{1,{i}}}$' for i in range(1, 21)]
-                   + [f'$B_{{2,{i}}}$' for i in range(1, 21)])
-    tick_positions = list(range(0, 40, 5))
+    m1m3_bl = [l.replace("M1M3_", "")
+                for l in DOF_LABELS[
+                    IDX_M1M3_START:IDX_M2_START]]
+    m2_bl = [l.replace("M2_", "")
+             for l in DOF_LABELS[IDX_M2_START:]]
+    bend_labels = m1m3_bl + m2_bl
+    n_bends = N_M1M3_BEND + N_M2_BEND
+    tick_positions = list(range(0, n_bends, 5))
     ax_bends.set_xticks(tick_positions)
-    ax_bends.set_xticklabels([bend_labels[i] for i in tick_positions], fontsize=10)
-    ax_bends.set_xlabel('M1M3                                        M2', fontsize=11)
-    ax_bends.axvline(19.5, color='gray', lw=1.5, ls='--')
+    ax_bends.set_xticklabels(
+        [bend_labels[i] for i in tick_positions],
+        fontsize=10)
+    ax_bends.set_xlabel(
+        'M1M3'
+        + ' ' * 40
+        + 'M2', fontsize=11)
+    ax_bends.axvline(
+        N_M1M3_BEND - 0.5,
+        color='gray', lw=1.5, ls='--')
 
     # Y-axis: label every pupil row, grey out excluded ones
     y_labels = []

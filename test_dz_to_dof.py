@@ -16,6 +16,11 @@ from dz_to_dof import (
     solve_dof,
     DOF_LABELS,
     N_DOF,
+    N_HEX,
+    N_M1M3_BEND,
+    N_M2_BEND,
+    IDX_M1M3_START,
+    IDX_M2_START,
 )
 
 
@@ -59,7 +64,7 @@ def test_columns_to_dz_matrix():
 
 def test_round_trip_solve():
     """Known x_true -> A @ x_true = y -> lstsq(A, y) recovers x_true."""
-    n_focal, n_pupil, n_dof = 6, 21, 50
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
     rng = np.random.default_rng(42)
     smatrix = rng.standard_normal((n_focal, n_pupil, n_dof))
     A = build_design_matrix(smatrix)
@@ -81,7 +86,7 @@ def test_flat_matrix_roundtrip():
 
 def test_solve_dof_shape_mismatch():
     """solve_dof raises ValueError when A rows != dz_matrix elements."""
-    A = np.zeros((126, 50))
+    A = np.zeros((126, N_DOF))
     dz_wrong_shape = np.zeros((5, 21))  # 105 != 126
     with pytest.raises(ValueError, match="Shape mismatch"):
         solve_dof(A, dz_wrong_shape)
@@ -105,12 +110,24 @@ def test_group_by_tolerance():
 
 def test_dof_labels():
     """DOF_LABELS has the right length and expected entries."""
-    assert len(DOF_LABELS) == N_DOF == 50
+    assert len(DOF_LABELS) == N_DOF == 51
     assert DOF_LABELS[0] == "M2_hex_z"
     assert DOF_LABELS[9] == "Cam_hex_ry"
     assert DOF_LABELS[10] == "M1M3_B1"
-    assert DOF_LABELS[30] == "M2_B1"
-    assert DOF_LABELS[49] == "M2_B20"
+    assert DOF_LABELS[30] == "M1M3_B52"
+    assert DOF_LABELS[31] == "M2_B1"
+    assert DOF_LABELS[50] == "M2_B20"
+
+
+def test_dof_structure():
+    """DOF boundary constants match DOF_LABELS."""
+    assert N_HEX + N_M1M3_BEND + N_M2_BEND == N_DOF
+    assert IDX_M1M3_START == N_HEX
+    assert IDX_M2_START == N_HEX + N_M1M3_BEND
+    assert DOF_LABELS[IDX_M1M3_START].startswith(
+        "M1M3_B")
+    assert DOF_LABELS[IDX_M2_START].startswith(
+        "M2_B")
 
 
 @pytest.fixture(scope="module")
@@ -232,7 +249,7 @@ def test_renorm_none_is_identity(ofc_data):
 
 def test_solver_roundtrip():
     """Solver recovers known DOFs with all 50."""
-    n_focal, n_pupil, n_dof = 6, 21, 50
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
     rng = np.random.default_rng(99)
     smatrix = rng.standard_normal(
         (n_focal, n_pupil, n_dof))
@@ -253,7 +270,7 @@ def test_solver_roundtrip():
 def test_solver_dof_subset():
     """Subset solver recovers signal that lives
     entirely in the subset."""
-    n_focal, n_pupil, n_dof = 6, 21, 50
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
     rng = np.random.default_rng(77)
     smatrix = rng.standard_normal(
         (n_focal, n_pupil, n_dof))
@@ -281,14 +298,14 @@ def test_solver_dof_subset():
         result["x_hat"][subset],
         x_true[subset], atol=1e-10)
     # Excluded DOFs are zero
-    excluded = list(range(10, 50))
+    excluded = list(range(10, N_DOF))
     np.testing.assert_array_equal(
         result["x_hat"][excluded], 0.0)
 
 
 def test_solver_residual_identity():
     """reconstructed + residual == input."""
-    n_focal, n_pupil, n_dof = 6, 21, 50
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
     rng = np.random.default_rng(55)
     smatrix = rng.standard_normal(
         (n_focal, n_pupil, n_dof))

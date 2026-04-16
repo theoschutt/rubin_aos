@@ -29,7 +29,7 @@ from astropy.table import QTable
 
 from dz_to_dof import (
     DZtoDOFSolver,
-    compact_index_str,
+    N_DOF,
     load_ofc_data,
     make_dz_column_names,
     median_per_group,
@@ -45,7 +45,14 @@ from dz_to_dof import (
 DEFAULT_PUPIL_INDICES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
                          15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
 DEFAULT_FOCAL_INDICES = [1, 2, 3, 4, 5, 6]
-
+# skips M1M3_B52 for now
+DEFAULT_DOF_INDICES = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, # hexapod
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, # m1m3 bending modes
+    31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+    41, 42, 43, 44, 45, 46, 47, 48, 49, 50 # m2 bending modes
+]
 
 
 
@@ -100,6 +107,30 @@ def group_by_rotator_angle(dz_tab, tolerance=1.0):
     return rot_groups, rotang_labels
 
 
+def compact_index_str(indices):
+    """Format a sorted list of ints as compact
+    range notation, e.g. [4-19,22-26]."""
+    if not indices:
+        return "[]"
+    s = sorted(indices)
+    ranges = []
+    start = end = s[0]
+    for v in s[1:]:
+        if v == end + 1:
+            end = v
+        else:
+            if start == end:
+                ranges.append(f"{start}")
+            else:
+                ranges.append(f"{start}-{end}")
+            start = end = v
+    if start == end:
+        ranges.append(f"{start}")
+    else:
+        ranges.append(f"{start}-{end}")
+    return "[" + ",".join(ranges) + "]"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Solve DZ-to-DOF inversion and produce all plots."
@@ -113,8 +144,8 @@ def main():
                         default=DEFAULT_FOCAL_INDICES,
                         help="Focal Zernike indices to use")
     parser.add_argument("--dof_indices", nargs="+", type=int,
-                        default=None,
-                        help="DOF indices (0-49) to solve. [default: [0-49]]")
+                        default=DEFAULT_DOF_INDICES,
+                        help=("DOF indices to solve."))
     parser.add_argument("--renorm", type=str, default=None,
                         choices=["orig", "geom"],
                         help="Normalization scheme for the sensitivity matrix")
@@ -125,6 +156,9 @@ def main():
     parser.add_argument("--version", type=str, default="",
                         help="Version string appended to output file names")
     args = parser.parse_args()
+
+    if args.renorm is not None and 30 in args.dof_indices:
+        raise ValueError("Cannot do renormalization with M1M3_B52 selected.")
 
     pupil_indices = args.pupil_indices
     focal_indices = args.focal_indices
@@ -215,7 +249,7 @@ def main():
     if args.dof_indices is not None:
         dof_str = (f"{compact_index_str(args.dof_indices)}")
     else:
-        dof_str = "[1-50]"
+        dof_str = f"[1-{N_DOF}]"
 
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
