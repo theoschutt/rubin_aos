@@ -151,6 +151,8 @@ def main():
                         help="Normalization scheme for the sensitivity matrix")
     parser.add_argument("--rot_tolerance", type=float, default=1.0,
                         help="Tolerance for grouping rotator angles (degrees)")
+    parser.add_argument("--rcond", type=float, default=1e-4,
+                        help="Tolerance for grouping rotator angles (degrees)")
     parser.add_argument("-o", "--output", default="dz_to_dof_results",
                         help="Output directory")
     parser.add_argument("--version", type=str, default="",
@@ -186,8 +188,8 @@ def main():
 
     print("\n=== Building solver ===")
     solver = DZtoDOFSolver(
-        ofc_data, pupil_indices, focal_indices,
-        dof_indices=args.dof_indices, norm_type=args.renorm,
+        ofc_data, pupil_indices, focal_indices, dof_indices=args.dof_indices,
+        norm_type=args.renorm, rcond=args.rcond
     )
     print(f"Design matrix A shape: {solver.A.shape}")
 
@@ -253,8 +255,8 @@ def main():
 
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
-        (f"Reconstructed DOFs from median DZ "
-         f"coeffs{renorm_str}\n Dates: {dates}\n{zk_str}"),
+        (f"Reconstructed DOFs from median DZ coeffs"
+         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\n{zk_str}"),
         output_dir / f"dof_solution{ver}.pdf",
         dof_indices=args.dof_indices,
     )
@@ -270,7 +272,7 @@ def main():
         rec_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"Reconstructed DZ Coefficients"
-         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
+         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_reconstructed{ver}.pdf",
     )
 
@@ -278,7 +280,7 @@ def main():
         d_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"DZ Coefficient Residuals"
-         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
+         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
     )
 
@@ -287,7 +289,7 @@ def main():
         d_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"DZ Coefficient Residuals"
-         f"{renorm_str}\n Dates: {dates}\nDOF: {dof_str}"),
+         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
         fixed_y=True,
     )

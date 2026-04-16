@@ -84,6 +84,7 @@ class DZtoDOFSolver:
         focal_indices,
         dof_indices=None,
         norm_type=None,
+        rcond=1e-4
     ):
         self.ofc_data = ofc_data
         self.pupil_indices = list(pupil_indices)
@@ -91,6 +92,7 @@ class DZtoDOFSolver:
         self.norm_type = norm_type
         self.n_focal = len(focal_indices)
         self.n_pupil = len(pupil_indices)
+        self.rcond = rcond
 
         if dof_indices is None:
             self.dof_indices = np.arange(N_DOF)
@@ -127,7 +129,10 @@ class DZtoDOFSolver:
         dict with keys ``'x_hat'``, ``'dz_reconstructed'``,
             ``'dz_residual'``, ``'rank'``, ``'singular_values'``.
         """
-        x_sub, _, rank, svals = solve_dof(self.A, dz_matrix, rcond=1e-3)
+        x_sub, _, rank, svals = solve_dof(self.A, dz_matrix, self.rcond)
+
+        print("rank:", rank)
+        print("svals:", svals)
 
         recon_flat = self.A @ x_sub
         dz_recon = flat_to_dz_matrix(recon_flat, self.n_focal, self.n_pupil)
@@ -163,7 +168,7 @@ class DZtoDOFSolver:
     @classmethod
     def _from_components(
         cls, A, n_focal, n_pupil,
-        dof_indices=None,
+        dof_indices=None, rcond=1e-4
     ):
         """Build from a pre-computed design
         matrix.  For testing; no normalization.
@@ -177,6 +182,7 @@ class DZtoDOFSolver:
         solver.n_focal = n_focal
         solver.n_pupil = n_pupil
         solver.norm_type = None
+        solver.rcond = rcond
         solver.ofc_data = None
         solver.full_coef = None
         solver.renorm_full_coef = None
@@ -539,7 +545,7 @@ def median_per_group(table, column_names, group_idx_list, n_focal, n_pupil):
 # Section 3: Least-Squares Solve
 # =========================================================================
 
-def solve_dof(A, dz_matrix, rcond=1e-3):
+def solve_dof(A, dz_matrix, rcond):
     """Solve A @ x_hat ≈ dz_flat via least-squares.
 
     Parameters
