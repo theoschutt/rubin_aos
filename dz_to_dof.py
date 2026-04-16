@@ -304,15 +304,20 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
         m2_bending_range / np.max(np.abs(m2_bmf.rot_mat), axis=0),
     ))
 
-    # Compute FWHM weights f_i
-    fwhm_matrix = np.zeros(sensitivity_matrix.shape)
-    for idy in range(sensitivity_matrix.shape[0]):
-        fwhm_matrix[idy, ...] = convertZernikesToPsfWidth(
-            sensitivity_matrix[idy, ...].T).T
-    fwhm_matrix_2d = fwhm_matrix.reshape((-1, fwhm_matrix.shape[2]))
-    fwhm_weights_50 = np.zeros(50)
-    for i in range(50):
-        fwhm_weights_50[i] = np.sqrt(np.sum(np.square(fwhm_matrix_2d[:, i])))
+    # Compute FWHM weights f_i (L2 norm over all focal/pupil pairs, per DOF)
+    n_f, n_p, n_d = sensitivity_matrix.shape
+    fwhm = convertZernikesToPsfWidth(
+        # cZTPW needs pupil Zernikes as columns: (n_f*n_d, n_p)
+        sensitivity_matrix.transpose(0, 2, 1).reshape(n_f * n_d, n_p)
+    )  
+    # get back to DOFs as columns, flatten all Zernikes: (n_f*n_p, n_d)
+    fwhm_2d = (
+        fwhm.reshape(n_f, n_d, n_p).transpose(0, 2, 1).reshape(n_f * n_p, n_d)
+    )
+    # equiv to sqrt(sum(fwhm_2d**2, axis=0))
+    fwhm_weights = np.linalg.norm(  # all N_DOF weights
+        fwhm_2d, axis=0
+    )
 
     # Extract for our DOFs
     r_i = range_weights[dof_indices]
