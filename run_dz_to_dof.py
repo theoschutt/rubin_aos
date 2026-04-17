@@ -22,6 +22,7 @@ Usage
         [-o output_dir] [--version v1]
 """
 import argparse
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -41,6 +42,8 @@ from dz_to_dof import (
     plot_dz_datasets,
     plot_dof_datasets,
 )
+
+log = logging.getLogger("dz_to_dof")
 
 DEFAULT_PUPIL_INDICES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
                          15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
@@ -67,11 +70,17 @@ def load_dz_data(parquet_path):
     n_before = len(dz_tab)
 
     if 'z1toz6_bad_fit' in dz_tab.colnames:
-        dz_tab = dz_tab[dz_tab['z1toz6_bad_fit'] == 0.]
-        print((f"Loaded {n_before} rows,"
-               f" kept {len(dz_tab)} after filtering bad fits"))
+        dz_tab = dz_tab[
+            dz_tab['z1toz6_bad_fit'] == 0.]
+        log.info(
+            "Loaded %d rows, kept %d"
+            " after filtering bad fits",
+            n_before, len(dz_tab))
     else:
-        print(f"Loaded {n_before} rows (no z1toz6_bad_fit column)")
+        log.info(
+            "Loaded %d rows"
+            " (no z1toz6_bad_fit column)",
+            n_before)
 
     return dz_tab
 
@@ -99,10 +108,14 @@ def group_by_rotator_angle(dz_tab, tolerance=1.0):
         angle = np.round(np.mean(np.asarray(dz_tab['rotator_angle'])[group]))
         rotang_labels.append(f"rot={angle:.0f}")
 
-    print(f"Found {len(rot_groups)} rotator angle groups: "
-          + ", ".join(rotang_labels))
+    log.info(
+        "Found %d rotator angle groups: %s",
+        len(rot_groups),
+        ", ".join(rotang_labels))
     for i, group in enumerate(rot_groups):
-        print(f"  {rotang_labels[i]}: {len(group)} observations")
+        log.debug(
+            "  %s: %d observations",
+            rotang_labels[i], len(group))
 
     return rot_groups, rotang_labels
 
@@ -173,27 +186,60 @@ def main():
     output_dir = Path(args.output) / parquet_basename / args.version
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # Write log of CLI options
+    # --- Set up logging ---
     import sys
-    log_file = output_dir / f"run_log{ver}.txt"
-    with open(log_file, "w") as f:
-        f.write(f"command: {' '.join(sys.argv)}\n\n")
-        for key, val in vars(args).items():
-            f.write(f"{key}: {val}\n")
-    print(f"Run log saved to {log_file}")
+    import time
+
+    log_path = output_dir / f"run_log{ver}.log"
+    fh = logging.FileHandler(log_path, mode="w")
+    fh.setLevel(logging.DEBUG)
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    fh.setFormatter(fmt)
+    sh.setFormatter(fmt)
+    log.addHandler(fh)
+    log.addHandler(sh)
+    log.setLevel(logging.DEBUG)
+
+    log.debug("command: %s", " ".join(sys.argv))
+    for key, val in vars(args).items():
+        log.debug("  %s: %s", key, val)
+    log.info("Log file: %s", log_path)
 
     # --- Load data ---
-    print("\n=== Loading OFCData ===")
+    log.info("Loading OFCData")
     ofc_data = load_ofc_data()
 
     print("\n=== Building solver ===")
     solver = DZtoDOFSolver(
-        ofc_data, pupil_indices, focal_indices, dof_indices=args.dof_indices,
-        norm_type=args.renorm, rcond=args.rcond
+        ofc_data, pupil_indices,
+        focal_indices,
+        dof_indices=args.dof_indices,
+        norm_type=args.renorm,
+        rcond=args.rcond,
+        smatrix_override=smatrix_override,
     )
-    print(f"Design matrix A shape: {solver.A.shape}")
+    log.info(
+        "Design matrix A: %s", solver.A.shape)
+    log.debug(
+        "DOF indices: %s",
+        compact_index_str(args.dof_indices))
+    log.debug("rcond: %s", args.rcond)
+    log.debug(
+        "effective rank: %d / %d",
+        solver.effective_rank,
+        len(args.dof_indices))
+    log.debug(
+        "condition number: %.2e",
+        solver.condition_number)
+    _, svals, Vt = solver.svd()
+    log.debug("singular values: %s", svals)
 
-    print("\n=== Loading DZ coefficients ===")
+    log.info("Loading DZ coefficients")
     dz_tab = load_dz_data(args.parquet_file)
     dates = np.unique(dz_tab['day_obs'])
 
@@ -208,19 +254,22 @@ def main():
     )
 
     # --- Group by rotator angle ---
-    print("\n=== Grouping by rotator angle ===")
-    rot_groups, rotang_labels = group_by_rotator_angle(
-        dz_tab, tolerance=args.rot_tolerance)
-
+    log.info("Grouping by rotator angle")
+    rot_groups, rotang_labels = (
+        group_by_rotator_angle(
+            dz_tab,
+            tolerance=args.rot_tolerance))
 
     # --- Compute median DZ per group ---
-    print("\n=== Computing median DZ per group ===")
-    col_names = make_dz_column_names(pupil_indices, focal_indices)
+    log.info("Computing median DZ per group")
+    col_names = make_dz_column_names(
+        pupil_indices, focal_indices)
     dz_arr_list = median_per_group(
-        dz_tab, col_names, rot_groups, n_focal, n_pupil)
+        dz_tab, col_names, rot_groups,
+        n_focal, n_pupil)
 
     # --- Solve for DOFs per group ---
-    print("\n=== Solving for DOFs ===")
+    log.info("Solving for DOFs")
     dof_hat_list = []
     rec_dz_list = []
     d_dz_list = []
@@ -231,19 +280,37 @@ def main():
         rec_dz_list.append(result["dz_reconstructed"])
         d_dz_list.append(result["dz_residual"])
 
-        rms = np.sqrt(np.mean(result["dz_residual"]**2))
-        print(f"\n  {rotang}: rank={result['rank']}, "
-              f"RMS residual={rms:.6f}")
-        print_dofs(result["x_hat"])
-        print()
-        print_residuals(
-            dz_matrix_to_flat(result["dz_residual"]),
-            focal_indices, pupil_indices,
-        )
+        rms = np.sqrt(
+            np.mean(result["dz_residual"]**2))
+        x = result["x_hat"]
+        i_max = np.argmax(np.abs(x))
+        log.debug(
+            "%s: rank=%d, RMS resid=%.6f, "
+            "max |DOF|=%.4f (%s)",
+            rotang, result["rank"], rms,
+            abs(x[i_max]), DOF_LABELS[i_max])
+        log.debug("\n%s", format_dofs(x))
+        log.debug(
+            "\n%s", format_residuals(
+                dz_matrix_to_flat(
+                    result["dz_residual"]),
+                focal_indices, pupil_indices))
+
+    elapsed = time.time() - t0
+    log.debug("Solve loop: %.2fs", elapsed)
+
+    # --- Summary table ---
+    log.info("RMS residuals by group:")
+    for rotang, d_dz in zip(
+        rotang_labels, d_dz_list
+    ):
+        rms = np.sqrt(np.mean(d_dz**2))
+        log.info("  %s: %.6f", rotang, rms)
 
     # --- Plots ---
-    print("\n=== Generating plots ===")
-    colors = plt.cm.tab10.colors[:len(rotang_labels)]
+    log.info("Generating plots")
+    colors = plt.cm.tab10.colors[
+        :len(rotang_labels)]
 
     renorm_str = f", Norm: {args.renorm}"
     zk_str = (f"focal k={compact_index_str(focal_indices)}"
@@ -294,7 +361,7 @@ def main():
         fixed_y=True,
     )
 
-    print(f"\nAll output saved to {output_dir}")
+    log.info("All output saved to %s", output_dir)
 
 
 if __name__ == "__main__":

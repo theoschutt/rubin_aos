@@ -15,10 +15,13 @@ Index conventions
   ``A[k * n_pupil + j_idx, dof]``.  k varies slowly, j fast.
 """
 
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from pathlib import Path
+
+log = logging.getLogger("dz_to_dof")
 
 # LSST stack imports are deferred to avoid import errors
 # when the stack is not set up (e.g. during basic tests).
@@ -129,10 +132,8 @@ class DZtoDOFSolver:
         dict with keys ``'x_hat'``, ``'dz_reconstructed'``,
             ``'dz_residual'``, ``'rank'``, ``'singular_values'``.
         """
-        x_sub, _, rank, svals = solve_dof(self.A, dz_matrix, self.rcond)
-
-        print("rank:", rank)
-        print("svals:", svals)
+        x_sub, _, rank, svals = solve_dof(
+            self.A, dz_matrix, self.rcond)
 
         recon_flat = self.A @ x_sub
         dz_recon = flat_to_dz_matrix(recon_flat, self.n_focal, self.n_pupil)
@@ -245,7 +246,7 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
         renorm_full_coef if renorm_full_coef is not None else full_coef,
         focal_indices, pupil_indices
     )
-    print(f"Sliced sensitivity matrix shape: {sliced.shape}")
+    log.debug("Sliced sensitivity matrix shape: %s", sliced.shape)
     return sliced, full_coef, renorm_full_coef
 
 def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
@@ -284,7 +285,7 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
     elif norm_type is None:
         norm_vector = np.ones(len(dof_indices))
 
-    print('renorm weights:', norm_vector)
+    log.debug("renorm weights: %s", norm_vector)
     return dof_vector * norm_vector
 
 def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
@@ -341,12 +342,20 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
     # Derive stored f_i from stored normalization weights and computed r_i
     f_i_stored = n_default / r_i
 
-    print(f'\nStored vs computed FWHM weights:')
-    print(f'{"DOF":>10s} {"f_i (computed)":>16s} {"f_i (stored)":>16s} {"ratio":>10s}')
-    print('-' * 56)
+    log.debug("Stored vs computed FWHM weights:")
+    log.debug(
+        "%10s %16s %16s %10s",
+        "DOF", "f_i (computed)",
+        "f_i (stored)", "ratio")
+    log.debug("-" * 56)
     for idx, name in enumerate(dof_names):
-        ratio = f_i[idx] / f_i_stored[idx] if f_i_stored[idx] != 0 else float('inf')
-        print(f'{name:>10s} {f_i[idx]:>16.6e} {f_i_stored[idx]:>16.6e} {ratio:>10.4f}')
+        ratio = (f_i[idx] / f_i_stored[idx]
+                 if f_i_stored[idx] != 0
+                 else float('inf'))
+        log.debug(
+            "%10s %16.6e %16.6e %10.4f",
+            name, f_i[idx],
+            f_i_stored[idx], ratio)
 
     return r_i, f_i, f_i_stored
 
@@ -806,7 +815,7 @@ def finalize_dz_figure(fig, axes, file_keys, dataset_colors,
 
     fig.suptitle(title, fontsize=12)
 
-    print(f"  Saving DZ plot to {output_path}")
+    log.info("Saving DZ plot to %s", output_path)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
@@ -1052,7 +1061,7 @@ def finalize_dof_figure(fig, axes, file_keys, dataset_colors,
 
     fig.suptitle(title, fontsize=12)
 
-    print(f"  Saving DOF plot to {output_path}")
+    log.info("Saving DOF plot to %s", output_path)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
@@ -1154,7 +1163,7 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
                  f' Norm: {norm_type}',
                  fontsize=13, y=0.98)
     plt.tight_layout()
-    print(f"  Saving sensitivity matrix plot to {output_path}")
+    log.info("Saving sensitivity plot to %s", output_path)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
