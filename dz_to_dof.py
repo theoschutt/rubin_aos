@@ -20,6 +20,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from pathlib import Path
+import yaml
 
 log = logging.getLogger("dz_to_dof")
 
@@ -88,6 +89,7 @@ class DZtoDOFSolver:
         dof_indices=None,
         norm_type=None,
         rcond=1e-4,
+        rank=None,
         smatrix_override=None,
     ):
         self.ofc_data = ofc_data
@@ -97,6 +99,7 @@ class DZtoDOFSolver:
         self.n_focal = len(focal_indices)
         self.n_pupil = len(pupil_indices)
         self.rcond = rcond
+        self.rank = rank
 
         if dof_indices is None:
             self.dof_indices = np.arange(N_DOF)
@@ -134,8 +137,12 @@ class DZtoDOFSolver:
         dict with keys ``'x_hat'``, ``'dz_reconstructed'``,
             ``'dz_residual'``, ``'rank'``, ``'singular_values'``.
         """
-        x_sub, _, rank, svals = solve_dof(
-            self.A, dz_matrix, self.rcond)
+        if self.rank is not None:
+            x_sub, rank, svals = self._solve_rank(
+                dz_matrix)
+        else:
+            x_sub, _, rank, svals = solve_dof(
+                self.A, dz_matrix, self.rcond)
 
         recon_flat = self.A @ x_sub
         dz_recon = flat_to_dz_matrix(recon_flat, self.n_focal, self.n_pupil)
@@ -168,6 +175,21 @@ class DZtoDOFSolver:
             "singular_values": svals,
         }
 
+    def _solve_rank(self, dz_matrix):
+        """Solve via rank-k truncated SVD.
+
+        Uses cached SVD to form the truncated
+        pseudoinverse A_k^+ = V[:,:k] diag(1/s[:k])
+        U[:,:k]^T, then applies it to y.
+        """
+        U, s, Vt = self.svd()
+        k = min(self.rank, len(s))
+        y = dz_matrix_to_flat(dz_matrix)
+        x_sub = (
+            Vt[:k].T
+            @ ((U[:, :k].T @ y) / s[:k]))
+        return x_sub, k, s
+
     def svd(self):
         """Compute/cache the thin SVD of A.
 
@@ -186,8 +208,10 @@ class DZtoDOFSolver:
     @property
     def effective_rank(self):
         """Number of singular values kept
-        given rcond."""
+        (rcond or rank mode)."""
         _, s, _ = self.svd()
+        if self.rank is not None:
+            return min(self.rank, len(s))
         threshold = self.rcond * s[0]
         return int(np.sum(s > threshold))
 
@@ -200,7 +224,7 @@ class DZtoDOFSolver:
     @classmethod
     def _from_components(
         cls, A, n_focal, n_pupil,
-        dof_indices=None, rcond=1e-4
+        dof_indices=None, rcond=1e-4, rank=None,
     ):
         """Build from a pre-computed design
         matrix.  For testing; no normalization.
@@ -215,6 +239,7 @@ class DZtoDOFSolver:
         solver.n_pupil = n_pupil
         solver.norm_type = None
         solver.rcond = rcond
+        solver.rank = rank
         solver.ofc_data = None
         solver.full_coef = None
         solver.renorm_full_coef = None
@@ -1051,14 +1076,30 @@ def setup_dof_figure(n_datasets):
     axes : dict  (keys: 'xyz', 'rxry', 'm1m3_bends', 'm2_bends')
     dataset_width : float
     """
-    fig = plt.figure(figsize=(14, 12))
-    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3, top=0.93)
+    fig = plt.figure(
+        figsize=(14, 12), constrained_layout=True)
+    gs = fig.add_gridspec(3, 1, hspace=0.3)
+
+    # Row 0: hexapod subplots side-by-side
+    gs_hex = gs[0].subgridspec(1, 2, wspace=0.3)
+
+    # Row 2: M2 bending narrower than M1M3 via
+    # a 2-col subgridspec where the second cell
+    # is left empty to absorb the width difference.
+    gs_m2 = gs[2].subgridspec(
+        1, 2,
+        width_ratios=[
+            N_M2_BEND,
+            N_M1M3_BEND - N_M2_BEND,
+        ],
+        wspace=0,
+    )
 
     axes = {
-        'xyz': fig.add_subplot(gs[0, 0]),
-        'rxry': fig.add_subplot(gs[0, 1]),
-        'm1m3_bends': fig.add_subplot(gs[1, :]),
-        'm2_bends': fig.add_subplot(gs[2, :]),
+        'xyz': fig.add_subplot(gs_hex[0, 0]),
+        'rxry': fig.add_subplot(gs_hex[0, 1]),
+        'm1m3_bends': fig.add_subplot(gs[1]),
+        'm2_bends': fig.add_subplot(gs_m2[0, 0]),
     }
 
     stagger_total = 0.8
@@ -1112,12 +1153,6 @@ def setup_dof_figure(n_datasets):
     axes['m2_bends'].grid(True, axis='y', alpha=0.4)
     for i in range(0, N_M2_BEND, 2):
         axes['m2_bends'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
-
-    # Shrink M2 subplot so tick spacing matches M1M3
-    p = axes['m1m3_bends'].get_position()
-    q = axes['m2_bends'].get_position()
-    axes['m2_bends'].set_position(
-        [q.x0, q.y0, p.width * N_M2_BEND / N_M1M3_BEND, q.height])
 
     return fig, axes, dataset_width
 

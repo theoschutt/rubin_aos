@@ -149,18 +149,22 @@ def compact_index_str(indices):
 
 def build_version_string(
     dof_indices, norm_type, rcond,
-    dof_name=None, suffix=None,
+    dof_name=None, suffix=None, rank=None,
 ):
     """Build version string from solver config.
 
     Pattern:
-      {dof}_{norm}_{rcond}[_{suffix}]
+      {dof}_{norm}_{mode}[_{suffix}]
+    where {mode} is either rcond{e} or rank{k}.
 
     Examples
     -------
     >>> build_version_string(
     ...     list(range(22)), "geom", 1e-10)
     '22dof_geom_rcond-10'
+    >>> build_version_string(
+    ...     list(range(22)), "geom", 1e-4, rank=20)
+    '22dof_geom_rank20'
     """
     if dof_name is not None:
         dof_part = dof_name
@@ -172,10 +176,12 @@ def build_version_string(
     else:
         norm_part = "no_renorm"
 
-    rcond_exp = int(np.log10(rcond))
-    rcond_part = f"rcond{rcond_exp}"
+    if rank is not None:
+        mode_part = f"rank{rank}"
+    else:
+        mode_part = f"rcond{int(np.log10(rcond))}"
 
-    parts = [dof_part, norm_part, rcond_part]
+    parts = [dof_part, norm_part, mode_part]
     if suffix:
         parts.append(suffix)
     return "_".join(parts)
@@ -203,6 +209,9 @@ def main():
                         help="Tolerance for grouping rotator angles (degrees)")
     parser.add_argument("--rcond", type=float, default=1e-4,
                         help="Cutoff for small singular values in lstsq")
+    parser.add_argument("--rank", type=int, default=None,
+                        help="Keep top-k singular values "
+                        "(mutually exclusive with --rcond)")
     parser.add_argument("--smatrix_file", type=str, default=None,
                         help="YAML spec for a custom smatrix "
                         "(default: OFC data, padded at B52)")
@@ -230,6 +239,11 @@ def main():
                         help="Skip V-mode heatmap")
     args = parser.parse_args()
 
+    if (args.rank is not None
+            and args.rcond != parser.get_default("rcond")):
+        raise ValueError(
+            "--rank and --rcond are mutually exclusive")
+
     if args.renorm is not None and 30 in args.dof_indices:
         raise ValueError("Cannot do renormalization with M1M3_B52 selected.")
 
@@ -241,7 +255,7 @@ def main():
     version = build_version_string(
         args.dof_indices, args.renorm,
         args.rcond, dof_name=args.dof_name,
-        suffix=args.version,
+        suffix=args.version, rank=args.rank,
     )
     ver = f"_{version}"
 
@@ -292,6 +306,7 @@ def main():
         dof_indices=args.dof_indices,
         norm_type=args.renorm,
         rcond=args.rcond,
+        rank=args.rank,
         smatrix_override=smatrix_override,
     )
     log.info(
@@ -365,6 +380,7 @@ def main():
     rec_dz_list = []
     d_dz_list = []
 
+    t0 = time.time()
     for rotang, dz_data in zip(rotang_labels, dz_arr_list):
         result = solver.solve(dz_data)
         dof_hat_list.append(result["x_hat"])
@@ -403,7 +419,7 @@ def main():
     colors = plt.cm.tab10.colors[
         :len(rotang_labels)]
 
-    renorm_str = f", Norm: {args.renorm}"
+    renorm_str = f"Norm: {args.renorm}"
     zk_str = (f"focal k={compact_index_str(focal_indices)}"
               f", pupil j={compact_index_str(pupil_indices)}")
     if args.dof_indices is not None:
@@ -411,12 +427,17 @@ def main():
     else:
         dof_str = f"[1-{N_DOF}]"
 
+    n_dof_sel = len(args.dof_indices)
+    if args.rank is not None:
+        mode_str = f"rank: {rank}/{n_dof_sel}"
+    else:
+        mode_str = (f"rcond: {args.rcond}, "
+                    f"rank: {rank}/{n_dof_sel}")
+
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
         (f"Reconstructed DOFs\n"
-         f"{renorm_str}, rcond: {args.rcond}"
-         f", rank: {rank}/"
-         f"{len(args.dof_indices)}"
+         f"{renorm_str}, {mode_str}"
          f"\nDates: {dates}\n{zk_str}"),
         output_dir / f"dof_solution{ver}.pdf",
         dof_indices=args.dof_indices,
@@ -434,7 +455,7 @@ def main():
         rec_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"Reconstructed DZ Coefficients\n"
-         f"{renorm_str}, rcond: {args.rcond}"
+         f"{renorm_str}, {mode_str}"
          f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_reconstructed{ver}.pdf",
     )
@@ -443,7 +464,7 @@ def main():
         d_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"DZ Coefficient Residuals\n"
-         f"{renorm_str}, rcond: {args.rcond}"
+         f"{renorm_str}, {mode_str}"
          f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
     )
@@ -453,7 +474,7 @@ def main():
         d_dz_list, pupil_indices,
         rotang_labels, colors,
         (f"DZ Coefficient Residuals\n"
-         f"{renorm_str}, rcond: {args.rcond}"
+         f"{renorm_str}, {mode_str}"
          f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
         fixed_y=True,

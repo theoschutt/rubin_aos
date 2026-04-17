@@ -381,3 +381,74 @@ def test_pad_ofc_array():
     already = np.arange(N_DOF, dtype=float)
     np.testing.assert_array_equal(
         pad_ofc_array(already), already)
+
+
+def test_solver_rank_truncation():
+    """Rank-k solver solution matches the explicit
+    truncated pseudoinverse of A applied to y."""
+    rng = np.random.default_rng(42)
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
+    smatrix = rng.standard_normal(
+        (n_focal, n_pupil, n_dof))
+    A = build_design_matrix(smatrix)
+    k = 20
+    solver = DZtoDOFSolver._from_components(
+        A, n_focal, n_pupil, rank=k)
+
+    dz_mat = rng.standard_normal(
+        (n_focal, n_pupil))
+    result = solver.solve(dz_mat)
+
+    # Expected: x = V[:,:k] @ diag(1/s[:k])
+    #              @ U[:,:k]^T @ y
+    U, s, Vt = np.linalg.svd(
+        A, full_matrices=False)
+    y = dz_matrix_to_flat(dz_mat)
+    expected = (
+        Vt[:k].T
+        @ ((U[:, :k].T @ y) / s[:k]))
+
+    np.testing.assert_allclose(
+        result["x_hat"], expected, atol=1e-10)
+    assert result["rank"] == k
+
+
+def test_solver_rank_equals_full():
+    """rank = min(m, n) gives the same solution as
+    the rcond-based solve at tight rcond."""
+    rng = np.random.default_rng(7)
+    n_focal, n_pupil, n_dof = 6, 21, N_DOF
+    smatrix = rng.standard_normal(
+        (n_focal, n_pupil, n_dof))
+    A = build_design_matrix(smatrix)
+    k_full = min(A.shape)
+
+    dz_mat = rng.standard_normal(
+        (n_focal, n_pupil))
+
+    # rcond-based solve with very tight rcond
+    s_rcond = DZtoDOFSolver._from_components(
+        A, n_focal, n_pupil, rcond=1e-12)
+    r_rcond = s_rcond.solve(dz_mat)
+
+    # rank-based solve with full rank
+    s_rank = DZtoDOFSolver._from_components(
+        A, n_focal, n_pupil, rank=k_full)
+    r_rank = s_rank.solve(dz_mat)
+
+    np.testing.assert_allclose(
+        r_rank["x_hat"], r_rcond["x_hat"],
+        atol=1e-8)
+
+
+def test_solver_rank_caps_at_min_mn():
+    """Requesting rank > min(m, n) is silently
+    capped to min(m, n)."""
+    rng = np.random.default_rng(3)
+    A = rng.standard_normal((30, 10))
+    k_max = min(A.shape)
+    solver = DZtoDOFSolver._from_components(
+        A, 6, 5, rank=k_max + 50)
+    dz_mat = rng.standard_normal((6, 5))
+    result = solver.solve(dz_mat)
+    assert result["rank"] == k_max
