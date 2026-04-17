@@ -87,7 +87,8 @@ class DZtoDOFSolver:
         focal_indices,
         dof_indices=None,
         norm_type=None,
-        rcond=1e-4
+        rcond=1e-4,
+        smatrix_override=None,
     ):
         self.ofc_data = ofc_data
         self.pupil_indices = list(pupil_indices)
@@ -109,6 +110,7 @@ class DZtoDOFSolver:
                 focal_indices,
                 pupil_indices,
                 norm_type=norm_type,
+                smatrix_override=smatrix_override,
             )
         )
         self.full_coef = full_coef
@@ -233,9 +235,76 @@ def load_ofc_data():
 
     return ofc_data
 
-def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
-    norm_type=None):
-    """Load, slice and optionally renormalize the OFC sensitivity matrix.
+def pad_ofc_array(arr, fill_value=1.0):
+    """Pad a 50-element OFC array (normalization
+    weights, range weights, etc.) to N_DOF by
+    inserting ``fill_value`` at the B52 slot.
+
+    Returns ``arr`` unchanged if already N_DOF-long.
+    Default fill is 1.0 (neutral multiplier);
+    only affects results if B52 is selected, which
+    is guarded against elsewhere.
+    """
+    arr = np.asarray(arr)
+    if len(arr) == N_DOF:
+        return arr
+    if len(arr) != N_DOF - 1:
+        raise ValueError(
+            f"Cannot pad array of length "
+            f"{len(arr)} to N_DOF ({N_DOF})")
+    b52_idx = IDX_M1M3_START + N_M1M3_BEND - 1
+    return np.insert(arr, b52_idx, fill_value)
+
+
+def load_smatrix_yaml(yaml_path):
+    """Load a custom sensitivity matrix from a YAML
+    spec + .npy sidecar.
+
+    YAML format
+    -----------
+    dof_labels: [list of N_DOF strings matching
+                 module-level DOF_LABELS]
+    smatrix_npy: path to .npy file with
+                 full_coef array of shape
+                 (n_f_full, n_p_full, N_DOF)
+
+    The .npy path is resolved relative to the
+    YAML file's directory.
+    """
+    import yaml
+    yaml_path = Path(yaml_path)
+    with open(yaml_path) as f:
+        spec = yaml.safe_load(f)
+    if spec["dof_labels"] != list(DOF_LABELS):
+        raise ValueError(
+            "YAML dof_labels do not match "
+            "module-level DOF_LABELS")
+    npy_path = (
+        yaml_path.parent / spec["smatrix_npy"])
+    full_coef = np.load(npy_path)
+    if full_coef.shape[-1] != N_DOF:
+        raise ValueError(
+            f"smatrix last axis "
+            f"{full_coef.shape[-1]} != "
+            f"N_DOF ({N_DOF})")
+    log.info(
+        "Loaded smatrix from %s (shape %s)",
+        npy_path, full_coef.shape)
+    return full_coef
+
+
+def load_sensitivity_matrix(
+    ofc_data, focal_indices, pupil_indices,
+    norm_type=None, smatrix_override=None,
+):
+    """Load, slice and optionally renormalize
+    the sensitivity matrix.
+
+    If ``smatrix_override`` is None, loads from
+    OFC data (padded to N_DOF if it is 50-wide,
+    inserting a zero column at index
+    IDX_M1M3_START + N_M1M3_BEND - 1 for B52).
+    Otherwise uses the provided full_coef array.
 
     Parameters
     ----------
@@ -243,7 +312,10 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
     focal_indices : array_like of int
     pupil_indices : array_like of int
     norm_type : str or None
-        Normalization scheme: 'orig', 'geom', or None.
+        ``'orig'``, ``'geom'``, or None.
+    smatrix_override : ndarray or None
+        Pre-loaded full_coef array with
+        shape (n_f_full, n_p_full, N_DOF).
 
     Returns
     -------
@@ -254,16 +326,37 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
     renorm_full_coef : ndarray or None
         Full renormalized coefficient array, if norm_type is set.
     """
-    import galsim
-    ideal_sens_dz = galsim.zernike.DoubleZernike(
-        ofc_data.sensitivity_matrix[..., :],
-        uv_inner=ofc_data.config["field"]["radius_inner"],
-        uv_outer=ofc_data.config["field"]["radius_outer"],
-        xy_inner=ofc_data.config["pupil"]["radius_inner"],
-        xy_outer=ofc_data.config["pupil"]["radius_outer"],
-    )
-    full_coef = ideal_sens_dz.coef
-    print(f"Full sensitivity matrix shape: {full_coef.shape}")
+    if smatrix_override is not None:
+        full_coef = smatrix_override
+    else:
+        import galsim
+        ideal_sens_dz = galsim.zernike.DoubleZernike(
+            ofc_data.sensitivity_matrix[..., :],
+            uv_inner=ofc_data.config[
+                "field"]["radius_inner"],
+            uv_outer=ofc_data.config[
+                "field"]["radius_outer"],
+            xy_inner=ofc_data.config[
+                "pupil"]["radius_inner"],
+            xy_outer=ofc_data.config[
+                "pupil"]["radius_outer"],
+        )
+        full_coef = ideal_sens_dz.coef
+        # Pad OFC smatrix (50 DOFs) to N_DOF by
+        # inserting a zero column at the B52 slot.
+        if full_coef.shape[-1] == N_DOF - 1:
+            b52_idx = (
+                IDX_M1M3_START + N_M1M3_BEND - 1)
+            full_coef = np.insert(
+                full_coef, b52_idx, 0.0, axis=-1)
+            log.info(
+                "Padded OFC smatrix to %d DOFs"
+                " (zero column at index %d"
+                " for B52)",
+                N_DOF, b52_idx)
+    log.debug(
+        "Full sensitivity matrix shape: %s",
+        full_coef.shape)
 
     if norm_type is not None:
         renorm_full_coef = renormalize_sensitivity_matrix(
@@ -284,13 +377,17 @@ def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
 
     if norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
-        # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M 
-        norm_matrix = np.diag(ofc_data.normalization_weights[dof_indices])
+        # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
+        nw = pad_ofc_array(
+            ofc_data.normalization_weights)
+        norm_matrix = np.diag(nw[dof_indices])
     elif norm_type == "geom":
-        r_i, f_i, _ = get_rf_weights(ofc_data, orig_smatrix, dof_indices)
+        r_i, f_i, _ = get_rf_weights(
+            ofc_data, orig_smatrix, dof_indices)
         norm_matrix = np.diag(np.sqrt(r_i / f_i))
     elif norm_type is None:
-        norm_matrix = np.diag(np.ones_like(dof_indices))
+        norm_matrix = np.diag(
+            np.ones_like(dof_indices))
 
     return orig_smatrix @ norm_matrix
 
@@ -304,7 +401,9 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
     if norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
         # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
-        norm_vector = ofc_data.normalization_weights[dof_indices]
+        nw = pad_ofc_array(
+            ofc_data.normalization_weights)
+        norm_vector = nw[dof_indices]
     elif norm_type == "geom":
         if orig_smatrix is None:
             raise ValueError(
@@ -329,10 +428,21 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
     m1m3_bmf = BendModeToForce('M1M3', ofc_data)
     m2_bmf = BendModeToForce('M2', ofc_data)
 
-    range_weights = np.concatenate((  # all N_DOF weights
+    # NOTE: geom normalization is not strictly
+    # valid when B52 is selected; the B52 slot uses
+    # a placeholder weight because OFC force range
+    # data does not include B52.  The CLI guard
+    # against (--renorm + B52) avoids this, but
+    # code paths that bypass that guard must not
+    # rely on range_weights[B52_idx] being
+    # physically meaningful.
+    range_weights = np.concatenate((  # N_DOF wts
         ofc_data.rb_stroke,
-        m1m3_bending_range / np.max(np.abs(m1m3_bmf.rot_mat), axis=0),
-        m2_bending_range / np.max(np.abs(m2_bmf.rot_mat), axis=0),
+        m1m3_bending_range / np.max(
+            np.abs(m1m3_bmf.rot_mat), axis=0),
+        [1.0],  # placeholder for B52
+        m2_bending_range / np.max(
+            np.abs(m2_bmf.rot_mat), axis=0),
     ))
 
     # Compute FWHM weights f_i (L2 norm over all focal/pupil pairs, per DOF)
@@ -353,8 +463,11 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
     # Extract for our DOFs
     r_i = range_weights[dof_indices]
     f_i = fwhm_weights[dof_indices]
-    n_default = ofc_data.normalization_weights[dof_indices]
-    dof_names = [DOF_LABELS[i] for i in dof_indices]
+    n_default = pad_ofc_array(
+        ofc_data.normalization_weights
+    )[dof_indices]
+    dof_names = [
+        DOF_LABELS[i] for i in dof_indices]
 
     # print('Normalization weight components for selected DOFs:')
     # print(f'{"DOF":>10s} {"r_i (range)":>14s} {"f_i (FWHM)":>14s}'

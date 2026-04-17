@@ -13,6 +13,7 @@ from dz_to_dof import (
     make_dz_column_names,
     renormalize_sensitivity_matrix,
     reverse_normalization,
+    pad_ofc_array,
     solve_dof,
     DOF_LABELS,
     N_DOF,
@@ -89,7 +90,7 @@ def test_solve_dof_shape_mismatch():
     A = np.zeros((126, N_DOF))
     dz_wrong_shape = np.zeros((5, 21))  # 105 != 126
     with pytest.raises(ValueError, match="Shape mismatch"):
-        solve_dof(A, dz_wrong_shape)
+        solve_dof(A, dz_wrong_shape, rcond=1e-4)
 
 
 def test_columns_to_dz_matrix_wrong_size():
@@ -321,3 +322,62 @@ def test_solver_residual_identity():
                  + result["dz_residual"])
     np.testing.assert_allclose(
         recovered, dz_mat, atol=1e-14)
+
+
+def test_svd_caching():
+    """svd() returns the same cached objects."""
+    rng = np.random.default_rng(88)
+    A = rng.standard_normal((20, 5))
+    solver = DZtoDOFSolver._from_components(
+        A, 4, 5)
+    r1 = solver.svd()
+    r2 = solver.svd()
+    assert r1[0] is r2[0]
+    assert r1[1] is r2[1]
+    assert r1[2] is r2[2]
+
+
+def test_effective_rank():
+    """effective_rank matches expected count."""
+    # Build a rank-3 matrix (5 cols, only 3
+    # have signal)
+    rng = np.random.default_rng(99)
+    base = rng.standard_normal((20, 3))
+    A = np.zeros((20, 5))
+    A[:, :3] = base
+    solver = DZtoDOFSolver._from_components(
+        A, 4, 5, rcond=1e-10)
+    assert solver.effective_rank == 3
+
+
+def test_svd_reconstruction():
+    """U @ diag(s) @ Vt reconstructs A."""
+    rng = np.random.default_rng(101)
+    A = rng.standard_normal((20, 8))
+    solver = DZtoDOFSolver._from_components(
+        A, 4, 5)
+    U, s, Vt = solver.svd()
+    reconstructed = U @ np.diag(s) @ Vt
+    np.testing.assert_allclose(
+        reconstructed, A, atol=1e-12)
+
+
+def test_pad_ofc_array():
+    """pad_ofc_array inserts a placeholder at
+    the B52 slot and is a no-op if already N_DOF
+    long."""
+    b52_idx = IDX_M1M3_START + N_M1M3_BEND - 1
+    # 50-element OFC-style array
+    src = np.arange(N_DOF - 1, dtype=float)
+    padded = pad_ofc_array(src, fill_value=1.0)
+    assert len(padded) == N_DOF
+    assert padded[b52_idx] == 1.0
+    # Values before and after are unchanged
+    np.testing.assert_array_equal(
+        padded[:b52_idx], src[:b52_idx])
+    np.testing.assert_array_equal(
+        padded[b52_idx + 1:], src[b52_idx:])
+    # Already-N_DOF arrays pass through
+    already = np.arange(N_DOF, dtype=float)
+    np.testing.assert_array_equal(
+        pad_ofc_array(already), already)

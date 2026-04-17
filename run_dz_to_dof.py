@@ -33,6 +33,7 @@ from dz_to_dof import (
     DZtoDOFSolver,
     N_DOF,
     load_ofc_data,
+    load_smatrix_yaml,
     make_dz_column_names,
     median_per_group,
     dz_matrix_to_flat,
@@ -201,8 +202,12 @@ def main():
     parser.add_argument("--rot_tolerance", type=float, default=1.0,
                         help="Tolerance for grouping rotator angles (degrees)")
     parser.add_argument("--rcond", type=float, default=1e-4,
-                        help="Tolerance for grouping rotator angles (degrees)")
-    parser.add_argument("-o", "--output", default="dz_to_dof_results",
+                        help="Cutoff for small singular values in lstsq")
+    parser.add_argument("--smatrix_file", type=str, default=None,
+                        help="YAML spec for a custom smatrix "
+                        "(default: OFC data, padded at B52)")
+    parser.add_argument("-o", "--output",
+                        default="dz_to_dof_results",
                         help="Output directory")
     parser.add_argument("--dof_name", type=str,
                         default=None,
@@ -275,7 +280,12 @@ def main():
     log.info("Loading OFCData")
     ofc_data = load_ofc_data()
 
-    print("\n=== Building solver ===")
+    smatrix_override = None
+    if args.smatrix_file is not None:
+        smatrix_override = load_smatrix_yaml(
+            args.smatrix_file)
+
+    log.info("Building solver")
     solver = DZtoDOFSolver(
         ofc_data, pupil_indices,
         focal_indices,
