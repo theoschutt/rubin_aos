@@ -41,6 +41,7 @@ from dz_to_dof import (
     plot_all_sensitivity_layers,
     plot_dz_datasets,
     plot_dof_datasets,
+    plot_v_modes,
 )
 
 log = logging.getLogger("dz_to_dof")
@@ -168,8 +169,25 @@ def main():
                         help="Tolerance for grouping rotator angles (degrees)")
     parser.add_argument("-o", "--output", default="dz_to_dof_results",
                         help="Output directory")
-    parser.add_argument("--version", type=str, default="",
-                        help="Version string appended to output file names")
+    parser.add_argument("--dof_name", type=str,
+                        default=None,
+                        help="Short name for DOF set "
+                        "(default: '{n}dof')")
+    parser.add_argument("--version", type=str,
+                        default=None,
+                        help="Suffix appended to "
+                        "auto-generated version")
+    parser.add_argument("--skip-sensitivity",
+                        action="store_true",
+                        help="Skip sensitivity "
+                        "matrix heatmaps")
+    parser.add_argument("--skip-dz",
+                        action="store_true",
+                        help="Skip DZ coefficient "
+                        "plots")
+    parser.add_argument("--skip-vmodes",
+                        action="store_true",
+                        help="Skip V-mode heatmap")
     args = parser.parse_args()
 
     if args.renorm is not None and 30 in args.dof_indices:
@@ -252,6 +270,22 @@ def main():
         smat, pupil_indices, n_focal + 1,
         args.renorm, smatrix_dir, ver,
     )
+
+    # --- V-mode heatmap ---
+    rank = solver.effective_rank
+    if not args.skip_vmodes:
+        log.info("Plotting V-mode heatmap")
+        dof_str_short = compact_index_str(
+            args.dof_indices)
+        plot_v_modes(
+            Vt, svals, args.dof_indices, rank,
+            (f"V-modes of design matrix A\n"
+             f"Norm: {args.renorm}, "
+             f"DOF: {dof_str_short}, "
+             f"rank: {rank}/"
+             f"{len(args.dof_indices)}"),
+            output_dir / f"v_modes{ver}.pdf",
+        )
 
     # --- Group by rotator angle ---
     log.info("Grouping by rotator angle")

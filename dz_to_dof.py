@@ -166,6 +166,35 @@ class DZtoDOFSolver:
             "singular_values": svals,
         }
 
+    def svd(self):
+        """Compute/cache the thin SVD of A.
+
+        Returns
+        -------
+        U : ndarray, shape (m, k)
+        s : ndarray, shape (k,)
+        Vt : ndarray, shape (k, n)
+            where k = min(m, n).
+        """
+        if not hasattr(self, '_svd_cache'):
+            self._svd_cache = np.linalg.svd(
+                self.A, full_matrices=False)
+        return self._svd_cache
+
+    @property
+    def effective_rank(self):
+        """Number of singular values kept
+        given rcond."""
+        _, s, _ = self.svd()
+        threshold = self.rcond * s[0]
+        return int(np.sum(s > threshold))
+
+    @property
+    def condition_number(self):
+        """Condition number of A (s_max / s_min)."""
+        _, s, _ = self.svd()
+        return s[0] / s[-1]
+
     @classmethod
     def _from_components(
         cls, A, n_focal, n_pupil,
@@ -1181,6 +1210,92 @@ def plot_all_sensitivity_layers(sensitivity_matrix, pupil_indices, n_focal,
     """
     output_dir = Path(output_dir)
     for k in range(1, n_focal):
-        output_path = output_dir / f'sensitivity_k{k}{version}.png'
-        plot_sensitivity_matrix_layer(sensitivity_matrix[k], pupil_indices,
-                                     k, norm_type, output_path)
+        output_path = (
+            output_dir
+            / f'sensitivity_k{k}{version}.png')
+        plot_sensitivity_matrix_layer(
+            sensitivity_matrix[k],
+            pupil_indices,
+            k, norm_type, output_path)
+
+
+def plot_v_modes(
+    Vt, singular_values, dof_indices,
+    rank, title, output_path,
+):
+    """Plot V-mode heatmap with singular value
+    spectrum.
+
+    Parameters
+    ----------
+    Vt : ndarray, shape (k, n_dof)
+        Rows of V^T from thin SVD of A.
+    singular_values : ndarray, shape (k,)
+    dof_indices : list of int
+        DOF indices corresponding to columns.
+    rank : int
+        Effective rank (number of kept modes).
+    title : str
+    output_path : Path
+    """
+    k, n_dof = Vt.shape
+    dof_labels = [DOF_LABELS[i]
+                  for i in dof_indices]
+
+    fig, (ax_v, ax_s) = plt.subplots(
+        1, 2,
+        figsize=(max(12, n_dof * 0.3), max(6, k * 0.25)),
+        gridspec_kw={'width_ratios': [4, 1]},
+        sharey=True,
+    )
+
+    # --- V-mode heatmap ---
+    abs_max = np.max(np.abs(Vt))
+    im = ax_v.imshow(
+        Vt, aspect='auto', cmap='RdBu_r',
+        vmin=-abs_max, vmax=abs_max,
+        interpolation='nearest',
+    )
+    ax_v.set_xticks(range(n_dof))
+    ax_v.set_xticklabels(
+        dof_labels, rotation=90,
+        fontsize=7)
+    ax_v.set_yticks(range(k))
+    ax_v.set_yticklabels(range(k), fontsize=7)
+    ax_v.set_xlabel('DOF', fontsize=10)
+    ax_v.set_ylabel('V-mode index', fontsize=10)
+
+    # Separator between kept and null space
+    if 0 < rank < k:
+        ax_v.axhline(
+            rank - 0.5, color='lime',
+            lw=2, ls='--')
+
+    plt.colorbar(
+        im, ax=ax_v, fraction=0.03,
+        pad=0.02)
+
+    # --- Singular value spectrum ---
+    ax_s.barh(
+        range(k), singular_values,
+        color=['steelblue'] * rank
+        + ['lightgray'] * (k - rank),
+        edgecolor='none',
+    )
+    ax_s.set_xlabel(
+        'Singular value', fontsize=10)
+    ax_s.invert_yaxis()
+    if 0 < rank < k:
+        ax_s.axhline(
+            rank - 0.5, color='lime',
+            lw=2, ls='--')
+
+    fig.suptitle(title, fontsize=11)
+    plt.tight_layout()
+    log.info(
+        "Saving V-mode plot to %s",
+        output_path)
+    plt.savefig(
+        output_path, dpi=150,
+        bbox_inches='tight')
+    plt.close(fig)
