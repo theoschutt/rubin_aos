@@ -247,9 +247,10 @@ def load_sensitivity_matrix(ofc_data, focal_indices, pupil_indices,
 
     Returns
     -------
-    sliced : ndarray, shape (n_focal, n_pupil, n_dof)
+    sliced : ndarray, shape
+        (n_focal, n_pupil, N_DOF)
     full_coef : ndarray
-        Full (unrenormalized) DoubleZernike coefficient array.
+        Full (unrenormalized) coefficient array.
     renorm_full_coef : ndarray or None
         Full renormalized coefficient array, if norm_type is set.
     """
@@ -620,8 +621,9 @@ def solve_dof(A, dz_matrix, rcond):
 # Section 4: Display / Printing
 # =========================================================================
 
-def print_dofs(x_hat):
-    """Print DOF solution vector in a two-column table layout."""
+def format_dofs(x_hat):
+    """Format DOF solution vector as a two-column
+    table string."""
     x_hat = np.asarray(x_hat)
     label_to_value = dict(zip(DOF_LABELS, x_hat))
 
@@ -635,25 +637,50 @@ def print_dofs(x_hat):
         ("M2 bends", DOF_LABELS[IDX_M2_START:]),
     ]
 
-    left_data = _build_rows(left_groups, label_to_value)
-    right_data = _build_rows(right_groups, label_to_value)
+    left_data = _build_rows(
+        left_groups, label_to_value)
+    right_data = _build_rows(
+        right_groups, label_to_value)
 
-    all_rows = [row for _, rows in (left_data + right_data) for row in rows]
-    label_w = max(len("DOF"), max(len(r[0]) for r in all_rows))
+    all_rows = [
+        row
+        for _, rows in (left_data + right_data)
+        for row in rows]
+    label_w = max(
+        len("DOF"),
+        max(len(r[0]) for r in all_rows))
     value_w = max(len("Value"), 14)
-    unit_w = max(len("Unit"), max(len(r[2]) for r in all_rows))
+    unit_w = max(
+        len("Unit"),
+        max(len(r[2]) for r in all_rows))
 
-    left_lines = _flatten_blocks(left_data, label_w, value_w, unit_w)
-    right_lines = _flatten_blocks(right_data, label_w, value_w, unit_w)
+    left_lines = _flatten_blocks(
+        left_data, label_w, value_w, unit_w)
+    right_lines = _flatten_blocks(
+        right_data, label_w, value_w, unit_w)
 
-    left_width = max(len(line) for line in left_lines)
-    n_lines = max(len(left_lines), len(right_lines))
-    left_lines += [""] * (n_lines - len(left_lines))
-    right_lines += [""] * (n_lines - len(right_lines))
+    left_width = max(
+        len(line) for line in left_lines)
+    n_lines = max(
+        len(left_lines), len(right_lines))
+    left_lines += [""] * (
+        n_lines - len(left_lines))
+    right_lines += [""] * (
+        n_lines - len(right_lines))
 
     gap = "   "
-    for l_line, r_line in zip(left_lines, right_lines):
-        print(f"{l_line:<{left_width}}{gap}{r_line}")
+    lines = []
+    for l_line, r_line in zip(
+        left_lines, right_lines
+    ):
+        lines.append(
+            f"{l_line:<{left_width}}{gap}{r_line}")
+    return "\n".join(lines)
+
+
+def print_dofs(x_hat):
+    """Print DOF solution vector."""
+    print(format_dofs(x_hat))
 
 
 def _build_rows(group_specs, label_to_value):
@@ -698,40 +725,61 @@ def _flatten_blocks(grouped_blocks, label_w, value_w, unit_w):
     return lines
 
 
-def print_residuals(residual_vector, focal_indices, pupil_indices, tolerance=0.01):
-    """Print residuals as a 2D table (pupil rows × focal columns).
+def format_residuals(
+    residual_vector, focal_indices,
+    pupil_indices, tolerance=0.01,
+):
+    """Format residuals as a 2D table string
+    (pupil rows x focal columns).
 
     Parameters
     ----------
     residual_vector : array_like
-        Flattened residual vector, length n_focal * n_pupil.
+        Flattened residual vector,
+        length n_focal * n_pupil.
     focal_indices : list of int
     pupil_indices : list of int
     tolerance : float
-        Absolute value threshold for asterisk marking.
+        Threshold for asterisk marking.
     """
     residuals_2d = flat_to_dz_matrix(
-        residual_vector, len(focal_indices), len(pupil_indices)
-    ).T  # transpose to (pupil, focal) for display
+        residual_vector,
+        len(focal_indices),
+        len(pupil_indices),
+    ).T  # transpose to (pupil, focal)
 
-    pupil_label_w = max(len(str(idx)) for idx in pupil_indices)
-    pupil_label_w = max(pupil_label_w, len("Pupil"))
-    focal_label_w = max(len(str(idx)) for idx in focal_indices)
-    focal_label_w = max(focal_label_w, 12)
+    pw = max(
+        len(str(idx)) for idx in pupil_indices)
+    pw = max(pw, len("Pupil"))
+    fw = max(
+        len(str(idx)) for idx in focal_indices)
+    fw = max(fw, 12)
 
-    header = f"{'j \\\\ k':<{pupil_label_w}}"
-    for focal_idx in focal_indices:
-        header += f" | {str(focal_idx):>{focal_label_w}}"
-    print(header)
-    print("-" * len(header))
+    lines = []
+    header = f"{'j \\\\ k':<{pw}}"
+    for fk in focal_indices:
+        header += f" | {str(fk):>{fw}}"
+    lines.append(header)
+    lines.append("-" * len(header))
 
-    for i, pupil_idx in enumerate(pupil_indices):
-        row = f"{str(pupil_idx):<{pupil_label_w}}"
+    for i, pj in enumerate(pupil_indices):
+        row = f"{str(pj):<{pw}}"
         for j in range(len(focal_indices)):
             val = residuals_2d[i, j]
-            marker = "*" if abs(val) > tolerance else " "
-            row += f" | {val:>{focal_label_w - 2}.6f} {marker}"
-        print(row)
+            m = "*" if abs(val) > tolerance else " "
+            row += f" | {val:>{fw - 2}.6f} {m}"
+        lines.append(row)
+    return "\n".join(lines)
+
+
+def print_residuals(
+    residual_vector, focal_indices,
+    pupil_indices, tolerance=0.01,
+):
+    """Print residuals table."""
+    print(format_residuals(
+        residual_vector, focal_indices,
+        pupil_indices, tolerance))
 
 
 # =========================================================================

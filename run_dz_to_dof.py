@@ -29,6 +29,7 @@ from pathlib import Path
 from astropy.table import QTable
 
 from dz_to_dof import (
+    DOF_LABELS,
     DZtoDOFSolver,
     N_DOF,
     load_ofc_data,
@@ -36,8 +37,8 @@ from dz_to_dof import (
     median_per_group,
     dz_matrix_to_flat,
     group_by_tolerance,
-    print_dofs,
-    print_residuals,
+    format_dofs,
+    format_residuals,
     plot_all_sensitivity_layers,
     plot_dz_datasets,
     plot_dof_datasets,
@@ -145,6 +146,40 @@ def compact_index_str(indices):
     return "[" + ",".join(ranges) + "]"
 
 
+def build_version_string(
+    dof_indices, norm_type, rcond,
+    dof_name=None, suffix=None,
+):
+    """Build version string from solver config.
+
+    Pattern:
+      {dof}_{norm}_{rcond}[_{suffix}]
+
+    Examples
+    -------
+    >>> build_version_string(
+    ...     list(range(22)), "geom", 1e-10)
+    '22dof_geom_rcond-10'
+    """
+    if dof_name is not None:
+        dof_part = dof_name
+    else:
+        dof_part = f"{len(dof_indices)}dof"
+
+    if norm_type is not None:
+        norm_part = norm_type
+    else:
+        norm_part = "no_renorm"
+
+    rcond_exp = int(np.log10(rcond))
+    rcond_part = f"rcond{rcond_exp}"
+
+    parts = [dof_part, norm_part, rcond_part]
+    if suffix:
+        parts.append(suffix)
+    return "_".join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Solve DZ-to-DOF inversion and produce all plots."
@@ -197,11 +232,19 @@ def main():
     focal_indices = args.focal_indices
     n_focal = len(focal_indices)
     n_pupil = len(pupil_indices)
-    ver = f"_{args.version}" if args.version else ""
+
+    version = build_version_string(
+        args.dof_indices, args.renorm,
+        args.rcond, dof_name=args.dof_name,
+        suffix=args.version,
+    )
+    ver = f"_{version}"
 
     # Output dir: <base>/<parquet_basename>/
     parquet_basename = Path(args.parquet_file).stem
-    output_dir = Path(args.output) / parquet_basename / args.version
+    output_dir = (
+        Path(args.output) / parquet_basename
+        / version)
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # --- Set up logging ---
@@ -262,14 +305,18 @@ def main():
     dates = np.unique(dz_tab['day_obs'])
 
     # --- Sensitivity matrix heatmaps ---
-    print("\n=== Plotting sensitivity matrix ===")
-    smatrix_dir = output_dir / "sensitivity_matrix"
-    smatrix_dir.mkdir(exist_ok=True)
-    smat = solver.renorm_full_coef if args.renorm else solver.full_coef
-    plot_all_sensitivity_layers(
-        smat, pupil_indices, n_focal + 1,
-        args.renorm, smatrix_dir, ver,
-    )
+    if not args.skip_sensitivity:
+        log.info("Plotting sensitivity matrix")
+        smatrix_dir = (
+            output_dir / "sensitivity_matrix")
+        smatrix_dir.mkdir(exist_ok=True)
+        smat = (solver.renorm_full_coef
+                if args.renorm
+                else solver.full_coef)
+        plot_all_sensitivity_layers(
+            smat, pupil_indices, n_focal + 1,
+            args.renorm, smatrix_dir, ver,
+        )
 
     # --- V-mode heatmap ---
     rank = solver.effective_rank
@@ -356,32 +403,38 @@ def main():
 
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
-        (f"Reconstructed DOFs from median DZ coeffs"
-         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\n{zk_str}"),
+        (f"Reconstructed DOFs\n"
+         f"{renorm_str}, rcond: {args.rcond}"
+         f", rank: {rank}/"
+         f"{len(args.dof_indices)}"
+         f"\nDates: {dates}\n{zk_str}"),
         output_dir / f"dof_solution{ver}.pdf",
         dof_indices=args.dof_indices,
     )
 
-    plot_dz_datasets(
-        dz_arr_list, pupil_indices,
-        rotang_labels, colors,
-        f"DZ Coefficients\nDates: {dates}",
-        output_dir / f"dz_coefficients{ver}.pdf",
-    )
+    if not args.skip_dz:
+        plot_dz_datasets(
+            dz_arr_list, pupil_indices,
+            rotang_labels, colors,
+            f"DZ Coefficients\nDates: {dates}",
+            output_dir / f"dz_coefficients{ver}.pdf",
+        )
 
     plot_dz_datasets(
         rec_dz_list, pupil_indices,
         rotang_labels, colors,
-        (f"Reconstructed DZ Coefficients"
-         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
+        (f"Reconstructed DZ Coefficients\n"
+         f"{renorm_str}, rcond: {args.rcond}"
+         f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_reconstructed{ver}.pdf",
     )
 
     plot_dz_datasets(
         d_dz_list, pupil_indices,
         rotang_labels, colors,
-        (f"DZ Coefficient Residuals"
-         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
+        (f"DZ Coefficient Residuals\n"
+         f"{renorm_str}, rcond: {args.rcond}"
+         f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
     )
 
@@ -389,8 +442,9 @@ def main():
     plot_dz_datasets(
         d_dz_list, pupil_indices,
         rotang_labels, colors,
-        (f"DZ Coefficient Residuals"
-         f"\nNorm: {renorm_str}, rcond: {args.rcond}\n Dates: {dates}\nDOF: {dof_str}"),
+        (f"DZ Coefficient Residuals\n"
+         f"{renorm_str}, rcond: {args.rcond}"
+         f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
         fixed_y=True,
     )
