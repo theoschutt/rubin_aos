@@ -91,6 +91,7 @@ class DZtoDOFSolver:
         rcond=1e-4,
         rank=None,
         smatrix_override=None,
+        weights_override=None,
     ):
         self.ofc_data = ofc_data
         self.pupil_indices = list(pupil_indices)
@@ -100,6 +101,7 @@ class DZtoDOFSolver:
         self.n_pupil = len(pupil_indices)
         self.rcond = rcond
         self.rank = rank
+        self.weights_override = weights_override
 
         if dof_indices is None:
             self.dof_indices = np.arange(N_DOF)
@@ -114,6 +116,7 @@ class DZtoDOFSolver:
                 pupil_indices,
                 norm_type=norm_type,
                 smatrix_override=smatrix_override,
+                weights_override=weights_override,
             )
         )
         self.full_coef = full_coef
@@ -152,13 +155,16 @@ class DZtoDOFSolver:
         dz_resid = flat_to_dz_matrix(resid_flat, self.n_focal, self.n_pupil)
 
         # Reverse normalization on the subset.
-        if self.norm_type is not None:
+        if (self.norm_type is not None
+                or self.weights_override is not None):
             x_phys_sub = reverse_normalization(
                 self.ofc_data,
                 x_sub,
                 self.norm_type,
                 self.full_coef,
                 self.dof_indices,
+                weights_override=(
+                    self.weights_override),
             )
         else:
             x_phys_sub = x_sub
@@ -240,6 +246,7 @@ class DZtoDOFSolver:
         solver.norm_type = None
         solver.rcond = rcond
         solver.rank = rank
+        solver.weights_override = None
         solver.ofc_data = None
         solver.full_coef = None
         solver.renorm_full_coef = None
@@ -318,9 +325,38 @@ def load_smatrix_yaml(yaml_path):
     return full_coef
 
 
+def load_weights_yaml(yaml_path):
+    """Load precomputed final normalization weights
+    from a YAML file.
+
+    YAML format: a flat list of N_DOF (or N_DOF-1)
+    floats at the top level.  If the array is
+    50-long, it is auto-padded to N_DOF (B52 slot
+    filled with 1.0).
+
+    Alternatively supports a dict with a
+    ``normalization_weights`` key for backward
+    compatibility with older files that include
+    a metadata block.
+    """
+    import yaml
+    with open(yaml_path) as f:
+        spec = yaml.safe_load(f)
+    if isinstance(spec, dict):
+        weights = spec["normalization_weights"]
+    else:
+        weights = spec
+    weights = pad_ofc_array(np.asarray(weights))
+    log.info(
+        "Loaded weights from %s (%d elements)",
+        yaml_path, len(weights))
+    return weights
+
+
 def load_sensitivity_matrix(
     ofc_data, focal_indices, pupil_indices,
     norm_type=None, smatrix_override=None,
+    weights_override=None,
 ):
     """Load, slice and optionally renormalize
     the sensitivity matrix.
@@ -383,9 +419,11 @@ def load_sensitivity_matrix(
         "Full sensitivity matrix shape: %s",
         full_coef.shape)
 
-    if norm_type is not None:
+    if (norm_type is not None
+            or weights_override is not None):
         renorm_full_coef = renormalize_sensitivity_matrix(
-            ofc_data, full_coef, norm_type
+            ofc_data, full_coef, norm_type,
+            weights_override=weights_override,
         )
     else:
         renorm_full_coef = None
@@ -398,9 +436,12 @@ def load_sensitivity_matrix(
     return sliced, full_coef, renorm_full_coef
 
 def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
-    dof_indices=range(N_DOF)):
+    dof_indices=range(N_DOF), weights_override=None):
 
-    if norm_type == "orig":
+    if weights_override is not None:
+        nw = np.asarray(weights_override)
+        norm_matrix = np.diag(nw[dof_indices])
+    elif norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
         # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
         nw = pad_ofc_array(
@@ -417,13 +458,17 @@ def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
     return orig_smatrix @ norm_matrix
 
 def reverse_normalization(ofc_data, dof_vector, norm_type,
-    orig_smatrix=None, dof_indices=range(N_DOF)):
+    orig_smatrix=None, dof_indices=range(N_DOF),
+    weights_override=None):
     """Reverse normalization of DOF vector to physical units.
 
     Must use the same norm_type and orig_smatrix that were
     passed to renormalize_sensitivity_matrix.
     """
-    if norm_type == "orig":
+    if weights_override is not None:
+        nw = np.asarray(weights_override)
+        norm_vector = nw[dof_indices]
+    elif norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
         # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
         nw = pad_ofc_array(
@@ -484,6 +529,13 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
     fwhm_weights = np.linalg.norm(  # all N_DOF weights
         fwhm_2d, axis=0
     )
+    # Guard against zero columns (e.g. the padded
+    # B52 slot in the OFC smatrix) so that
+    # sqrt(r_i / f_i) downstream does not blow up.
+    # A value of 1.0 acts as a neutral placeholder;
+    # callers must not rely on these DOFs anyway.
+    fwhm_weights = np.where(
+        fwhm_weights == 0, 1.0, fwhm_weights)
 
     # Extract for our DOFs
     r_i = range_weights[dof_indices]

@@ -34,6 +34,7 @@ from dz_to_dof import (
     N_DOF,
     load_ofc_data,
     load_smatrix_yaml,
+    load_weights_yaml,
     make_dz_column_names,
     median_per_group,
     dz_matrix_to_flat,
@@ -215,6 +216,9 @@ def main():
     parser.add_argument("--smatrix_file", type=str, default=None,
                         help="YAML spec for a custom smatrix "
                         "(default: OFC data, padded at B52)")
+    parser.add_argument("--weights_file", type=str, default=None,
+                        help="YAML with precomputed norm weights "
+                        "(overrides --renorm computation)")
     parser.add_argument("-o", "--output",
                         default="dz_to_dof_results",
                         help="Output directory")
@@ -244,6 +248,22 @@ def main():
         raise ValueError(
             "--rank and --rcond are mutually exclusive")
 
+    run_single(args)
+
+
+def run_single(args, ofc_data=None):
+    """Execute one DZ-to-DOF inversion run.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Fully-populated namespace (see `main()`
+        for required fields).
+    ofc_data : OFCData or None
+        Optional pre-loaded OFC data; used by the
+        grid runner to share the load across runs.
+        Ignored if cache files cover all needs.
+    """
     if args.renorm is not None and 30 in args.dof_indices:
         raise ValueError("Cannot do renormalization with M1M3_B52 selected.")
 
@@ -268,7 +288,6 @@ def main():
 
     # --- Set up logging ---
     import sys
-    import time
 
     log_path = output_dir / f"run_log{ver}.log"
     fh = logging.FileHandler(log_path, mode="w")
@@ -284,20 +303,66 @@ def main():
     log.addHandler(fh)
     log.addHandler(sh)
     log.setLevel(logging.DEBUG)
+    # Disable propagation so messages aren't
+    # double-emitted when the caller (e.g. the
+    # grid runner) also has root handlers.
+    prev_propagate = log.propagate
+    log.propagate = False
 
     log.debug("command: %s", " ".join(sys.argv))
     for key, val in vars(args).items():
         log.debug("  %s: %s", key, val)
     log.info("Log file: %s", log_path)
 
-    # --- Load data ---
-    log.info("Loading OFCData")
-    ofc_data = load_ofc_data()
+    try:
+        _run_body(
+            args, ofc_data, pupil_indices,
+            focal_indices, n_focal, n_pupil,
+            ver, output_dir)
+    finally:
+        log.removeHandler(fh)
+        log.removeHandler(sh)
+        fh.close()
+        log.propagate = prev_propagate
 
+
+def _run_body(
+    args, ofc_data, pupil_indices, focal_indices,
+    n_focal, n_pupil, ver, output_dir,
+):
+    """Core work of a single run (post logging
+    setup).  Split out so that finally-cleanup of
+    logging handlers is straightforward.
+    """
+    import time
+
+    # --- Load data ---
     smatrix_override = None
     if args.smatrix_file is not None:
         smatrix_override = load_smatrix_yaml(
             args.smatrix_file)
+
+    weights_override = None
+    if args.weights_file is not None:
+        weights_override = load_weights_yaml(
+            args.weights_file)
+
+    # Skip OFC load if both cache files cover it
+    need_ofc = (
+        smatrix_override is None
+        or (args.renorm is not None
+            and weights_override is None)
+    )
+    if need_ofc and ofc_data is None:
+        log.info("Loading OFCData")
+        ofc_data = load_ofc_data()
+    elif not need_ofc:
+        log.info(
+            "Skipping OFCData load "
+            "(using cached smatrix + weights)")
+        ofc_data = None
+    else:
+        log.info("Reusing OFCData from caller")
 
     log.info("Building solver")
     solver = DZtoDOFSolver(
@@ -308,6 +373,7 @@ def main():
         rcond=args.rcond,
         rank=args.rank,
         smatrix_override=smatrix_override,
+        weights_override=weights_override,
     )
     log.info(
         "Design matrix A: %s", solver.A.shape)
@@ -467,16 +533,6 @@ def main():
          f"{renorm_str}, {mode_str}"
          f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
-    )
-
-    # better viz for relative contributions
-    plot_dz_datasets(
-        d_dz_list, pupil_indices,
-        rotang_labels, colors,
-        (f"DZ Coefficient Residuals\n"
-         f"{renorm_str}, {mode_str}"
-         f"\nDates: {dates}\nDOF: {dof_str}"),
-        output_dir / f"dz_residuals_fixed_ylims{ver}.pdf",
         fixed_y=True,
     )
 

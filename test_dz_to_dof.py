@@ -14,6 +14,7 @@ from dz_to_dof import (
     renormalize_sensitivity_matrix,
     reverse_normalization,
     pad_ofc_array,
+    load_weights_yaml,
     solve_dof,
     DOF_LABELS,
     N_DOF,
@@ -162,8 +163,11 @@ def test_renorm_orig_roundtrip(ofc_data):
     A_renorm = build_design_matrix(sliced_renorm)
 
     # Synthesize DZ data from known physical DOFs
+    # (B52 column is zero in OFC smatrix, so
+    # x_true[B52] is not recoverable; set it to 0)
     rng = np.random.default_rng(42)
     x_true = rng.standard_normal(N_DOF)
+    x_true[IDX_M1M3_START + N_M1M3_BEND - 1] = 0.0
     y = A_orig @ x_true
     dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
 
@@ -207,8 +211,11 @@ def test_renorm_geom_roundtrip(ofc_data):
     A_renorm = build_design_matrix(sliced_renorm)
 
     # Synthesize DZ data from known physical DOFs
+    # (B52 column is zero in OFC smatrix, so
+    # x_true[B52] is not recoverable; set it to 0)
     rng = np.random.default_rng(42)
     x_true = rng.standard_normal(N_DOF)
+    x_true[IDX_M1M3_START + N_M1M3_BEND - 1] = 0.0
     y = A_orig @ x_true
     dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
 
@@ -452,3 +459,35 @@ def test_solver_rank_caps_at_min_mn():
     dz_mat = rng.standard_normal((6, 5))
     result = solver.solve(dz_mat)
     assert result["rank"] == k_max
+
+
+def test_load_weights_yaml_flat_list(tmp_path):
+    """Flat-list YAML is loaded and padded."""
+    import yaml
+    # 50 weights → auto-padded to N_DOF
+    weights = [float(i + 1) for i in range(50)]
+    p = tmp_path / "w.yaml"
+    with open(p, "w") as f:
+        yaml.safe_dump(weights, f)
+
+    loaded = load_weights_yaml(p)
+    assert len(loaded) == N_DOF
+    b52_idx = IDX_M1M3_START + N_M1M3_BEND - 1
+    assert loaded[b52_idx] == 1.0
+
+
+def test_load_weights_yaml_dict(tmp_path):
+    """Dict-with-metadata YAML also works."""
+    import yaml
+    weights = [float(i + 1) for i in range(N_DOF)]
+    p = tmp_path / "w.yaml"
+    with open(p, "w") as f:
+        yaml.safe_dump({
+            "metadata": {"method": "orig"},
+            "normalization_weights": weights,
+        }, f)
+
+    loaded = load_weights_yaml(p)
+    assert len(loaded) == N_DOF
+    np.testing.assert_array_equal(
+        loaded, weights)

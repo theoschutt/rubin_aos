@@ -3,6 +3,9 @@
 DOF sets, truncation values (rcond and/or rank),
 and normalization schemes.
 
+Runs iterations in-process so the OFC data load
+(or module imports) is paid at most once.
+
 Usage
 -----
     python run_grid.py <parquet_file> \
@@ -14,9 +17,20 @@ The config JSON may have ``rcond_values``,
 becomes one run per (dof_set, norm) combo.
 """
 import argparse
+import copy
 import json
-import subprocess
-import sys
+import logging
+
+import run_dz_to_dof
+from dz_to_dof import load_ofc_data
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("run_grid")
 
 
 def load_config(path):
@@ -26,9 +40,6 @@ def load_config(path):
     -------
     dof_sets : dict
     mode_specs : list of (str, value)
-        Each tuple is either ('rcond', r) or
-        ('rank', k), in config order
-        (rcond entries first, then rank).
     norm_schemes : list
     """
     with open(path) as f:
@@ -51,32 +62,77 @@ def load_config(path):
     )
 
 
-def build_command(
+def _base_defaults():
+    """Build an argparse.Namespace with all the
+    fields run_dz_to_dof.run_single expects,
+    populated from the main parser's defaults.
+    """
+    # Pre-parse with no extra args to get defaults
+    # (requires a placeholder for the positional
+    # parquet_file; we overwrite it per run).
+    import sys
+    saved = sys.argv
+    try:
+        sys.argv = ["run_dz_to_dof.py", "PLACEHOLDER"]
+        # Build the parser the same way main() does
+        # by calling main() up to parse_args is
+        # awkward; instead, construct a Namespace
+        # manually with all defaults.
+    finally:
+        sys.argv = saved
+    # Build Namespace with the same defaults as
+    # run_dz_to_dof.main()'s argparse.
+    from run_dz_to_dof import (
+        DEFAULT_PUPIL_INDICES,
+        DEFAULT_FOCAL_INDICES,
+        DEFAULT_DOF_INDICES,
+    )
+    return argparse.Namespace(
+        parquet_file=None,
+        pupil_indices=DEFAULT_PUPIL_INDICES,
+        focal_indices=DEFAULT_FOCAL_INDICES,
+        dof_indices=DEFAULT_DOF_INDICES,
+        renorm=None,
+        rot_tolerance=1.0,
+        rcond=1e-4,
+        rank=None,
+        smatrix_file=None,
+        weights_file=None,
+        output="dz_to_dof_results",
+        dof_name=None,
+        version=None,
+        skip_sensitivity=False,
+        skip_dz=False,
+        skip_vmodes=False,
+    )
+
+
+def build_args(
     parquet_file, dof_name, dof_indices,
     norm, mode, mode_value,
     skip_flags, output_dir,
+    smatrix_file=None, weights_file=None,
 ):
-    """Build the run_dz_to_dof.py command."""
-    cmd = [
-        sys.executable,
-        "run_dz_to_dof.py",
-        parquet_file,
-        "--dof_indices",
-    ] + [str(d) for d in dof_indices]
-
-    cmd += ["--dof_name", dof_name]
+    """Build a Namespace for one grid iteration."""
+    args = _base_defaults()
+    args.parquet_file = parquet_file
+    args.dof_indices = list(dof_indices)
+    args.dof_name = dof_name
+    args.renorm = norm
+    args.output = output_dir
+    args.smatrix_file = smatrix_file
+    args.weights_file = weights_file
     if mode == "rank":
-        cmd += ["--rank", str(mode_value)]
+        args.rank = mode_value
     else:
-        cmd += ["--rcond", str(mode_value)]
-
-    if norm is not None:
-        cmd += ["--renorm", norm]
-
-    cmd += ["-o", output_dir]
-    cmd += skip_flags
-
-    return cmd
+        args.rcond = mode_value
+    args.skip_sensitivity = (
+        "--skip-sensitivity" in skip_flags)
+    args.skip_dz = (
+        "--skip-dz" in skip_flags)
+    args.skip_vmodes = (
+        "--skip-vmodes" in skip_flags)
+    return args
 
 
 def main():
@@ -92,23 +148,36 @@ def main():
         default="dz_to_dof_results",
         help="Output directory")
     parser.add_argument(
+        "--smatrix_file", type=str, default=None,
+        help="YAML spec for a cached smatrix "
+        "(bypasses OFC load if combined with "
+        "--weights_file)")
+    parser.add_argument(
+        "--weights_file", type=str, default=None,
+        help="YAML with precomputed norm weights "
+        "(per-run; applied to all grid points)")
+    parser.add_argument(
         "--dry-run", action="store_true",
-        help="Print commands without running")
+        help="Print config without running")
     args = parser.parse_args()
 
     (dof_sets, mode_specs, norm_schemes) = (
         load_config(args.config))
 
+    # Decide whether we need OFC up front.  If
+    # smatrix_file is given but weights_file is
+    # not, OFC is only needed when a renorm is
+    # used; we load lazily in that case.
+    ofc_data = None
+
     # Track what's been plotted for skip flags
     seen_sens = set()      # (norm,)
-    seen_dz = False        # once per dataset
+    seen_dz = False
     seen_vmodes = set()    # (dof_name, norm)
 
     n_total = 0
     n_skipped = 0
 
-    # Iteration order: norm -> dof_set -> mode_spec
-    # (optimal for skip-flag clustering)
     for norm in norm_schemes:
         norm_str = norm if norm else "None"
         for dof_name, dof_indices in (
@@ -125,7 +194,6 @@ def main():
                 n_total += 1
                 skip_flags = []
 
-                # Sensitivity: once per norm
                 sens_key = (norm_str,)
                 if sens_key in seen_sens:
                     skip_flags.append(
@@ -133,14 +201,11 @@ def main():
                 else:
                     seen_sens.add(sens_key)
 
-                # DZ coefficients: once total
                 if seen_dz:
-                    skip_flags.append(
-                        "--skip-dz")
+                    skip_flags.append("--skip-dz")
                 else:
                     seen_dz = True
 
-                # V-modes: once per (dof, norm)
                 vm_key = (dof_name, norm_str)
                 if vm_key in seen_vmodes:
                     skip_flags.append(
@@ -148,31 +213,56 @@ def main():
                 else:
                     seen_vmodes.add(vm_key)
 
-                cmd = build_command(
+                run_args = build_args(
                     args.parquet_file,
                     dof_name, dof_indices,
                     norm, mode, mode_value,
                     skip_flags, args.output,
+                    smatrix_file=args.smatrix_file,
+                    weights_file=args.weights_file,
                 )
 
-                print(
-                    f"\n{'=' * 60}\n"
-                    f"[{n_total}] "
-                    f"{dof_name}, "
-                    f"norm={norm_str}, "
-                    f"{mode}={mode_value}"
-                    f"\n{'=' * 60}")
+                log.info(
+                    "=" * 60 + "\n"
+                    "[%d] %s, norm=%s, %s=%s\n"
+                    + "=" * 60,
+                    n_total, dof_name, norm_str,
+                    mode, mode_value,
+                )
 
                 if args.dry_run:
-                    print(" ".join(cmd))
-                else:
-                    subprocess.run(
-                        cmd, check=True)
+                    log.info(
+                        "(dry-run) would call "
+                        "run_single(args)")
+                    continue
 
-    print(
-        f"\nDone. {n_total} runs, "
-        f"{n_skipped} skipped "
-        f"(renorm+B52).")
+                # Lazy-load OFC the first time a
+                # run actually needs it.
+                need_ofc = (
+                    args.smatrix_file is None
+                    or (norm is not None
+                        and args.weights_file
+                        is None)
+                )
+                if (need_ofc
+                        and ofc_data is None):
+                    log.info(
+                        "Loading OFCData "
+                        "(shared across grid)")
+                    ofc_data = load_ofc_data()
+
+                try:
+                    run_dz_to_dof.run_single(
+                        run_args,
+                        ofc_data=ofc_data,
+                    )
+                except Exception:
+                    log.exception(
+                        "Run failed; continuing")
+
+    log.info(
+        "Done. %d runs, %d skipped (renorm+B52).",
+        n_total, n_skipped)
 
 
 if __name__ == "__main__":
