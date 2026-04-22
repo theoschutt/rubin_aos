@@ -117,8 +117,11 @@ def filter_dz_data(dz_tab, column_names, values, tolerance=1.0):
     column_names : list of str
         Columns to filter on. ``"alt"`` is converted rad -> deg before
         comparison (so pass ``values`` in degrees).
-    values : list of float
-        Target value per column, same length as ``column_names``.
+    values : list of list of float
+        Target value(s) per column, same length as ``column_names``.
+        Rows are kept if each column is within tolerance of ANY of its
+        listed values (OR within column, AND across columns). A scalar
+        is accepted in place of a one-element list.
     tolerance : float
         Absolute tolerance in degrees (or native units for non-alt).
 
@@ -134,10 +137,14 @@ def filter_dz_data(dz_tab, column_names, values, tolerance=1.0):
             f"the same length (got {len(column_names)} vs "
             f"{len(values)})")
     mask = np.ones(len(dz_tab), dtype=bool)
-    for col, val in zip(column_names, values):
+    for col, vals in zip(column_names, values):
         mult = 180. / np.pi if col == 'alt' else 1.
         col_vals = mult * np.asarray(dz_tab[col])
-        mask &= np.abs(col_vals - val) <= tolerance
+        targets = np.atleast_1d(vals).astype(float)
+        col_mask = np.any(
+            np.abs(col_vals[:, None] - targets[None, :]) <= tolerance,
+            axis=1)
+        mask &= col_mask
     log.info(
         "Filter %s: %d rows -> %d rows",
         dict(zip(column_names, values)),
@@ -324,9 +331,13 @@ def build_parser():
                         "--filter_col_name rotator_angle "
                         "--filter_val 0 keeps only rot=0 rows."))
     parser.add_argument("--filter_val", type=float, nargs='+',
-                        default=None,
-                        help=("Target value(s) for --filter_col_name "
-                        "(degrees for alt)."))
+                        action='append', default=None,
+                        help=("Target value(s) for --filter_col_name. "
+                        "Repeat the flag once per column, each time "
+                        "passing one or more values (OR within column, "
+                        "AND across). E.g. --filter_col_name alt "
+                        "rotator_angle --filter_val 70 75 "
+                        "--filter_val 0. Degrees for alt."))
     parser.add_argument("--filter_tolerance", type=float, default=1.0,
                         help="Tolerance for --filter_val match (deg)")
     parser.add_argument("--rcond", type=float, default=1e-4,
