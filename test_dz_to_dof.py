@@ -110,6 +110,36 @@ def test_group_by_tolerance():
     assert set(groups[2]) == {4}
 
 
+def test_group_by_tolerance_chain():
+    """Single-linkage: a chain of values each
+    within tolerance of neighbours ends up as
+    one group, regardless of input order.
+    """
+    # -45.3, -44.9, -44.5: adjacent gaps 0.4 each
+    values = [-44.5, -45.3, -44.9]
+    groups = group_by_tolerance(values, tolerance=1.0)
+    assert len(groups) == 1
+    assert set(groups[0]) == {0, 1, 2}
+
+
+def test_group_by_tolerance_order_invariant():
+    """Grouping is invariant to input order."""
+    values = [-45.2, -44.8, -45.6, 14.8, 15.2]
+    g1 = group_by_tolerance(values, tolerance=1.0)
+    values_shuffled = [values[i]
+                       for i in [3, 0, 4, 2, 1]]
+    g2 = group_by_tolerance(
+        values_shuffled, tolerance=1.0)
+    # Same set of value-groups (via values at
+    # the grouped indices) regardless of input
+    # order
+    by_val = lambda vs, gs: sorted(
+        tuple(sorted(vs[i] for i in g))
+        for g in gs)
+    assert (by_val(values, g1)
+            == by_val(values_shuffled, g2))
+
+
 def test_dof_labels():
     """DOF_LABELS has the right length and expected entries."""
     assert len(DOF_LABELS) == N_DOF == 51

@@ -18,7 +18,7 @@ Usage
         [--pupil_indices 4 5 6 ... 19 22 23 24 25 26] \\
         [--focal_indices 1 2 3 4 5 6] \\
         [--dof_indices 0 1 2 ...] \\
-        [--rot_tolerance 1.0] \\
+        [--group_tolerance 1.0] \\
         [-o output_dir] [--version v1]
 """
 import argparse
@@ -38,7 +38,7 @@ from dz_to_dof import (
     make_dz_column_names,
     median_per_group,
     dz_matrix_to_flat,
-    group_by_tolerance,
+    assign_groups,
     format_dofs,
     format_residuals,
     plot_all_sensitivity_layers,
@@ -63,65 +63,157 @@ DEFAULT_DOF_INDICES = [
 
 
 
-def load_dz_data(parquet_path):
-    """Load DZ coefficient table from a parquet file, filtering bad fits.
+def load_dz_data(parquet_paths):
+    """Load and concatenate DZ coefficient tables
+    from one or more parquet files, filtering
+    bad fits.
+
+    Parameters
+    ----------
+    parquet_paths : str or list of str
 
     Returns
     -------
     dz_tab : QTable
     """
-    dz_tab = QTable.read(parquet_path)
-    n_before = len(dz_tab)
+    if isinstance(parquet_paths, (str, Path)):
+        parquet_paths = [parquet_paths]
 
-    if 'z1toz6_bad_fit' in dz_tab.colnames:
-        dz_tab = dz_tab[
-            dz_tab['z1toz6_bad_fit'] == 0.]
-        log.info(
-            "Loaded %d rows, kept %d"
-            " after filtering bad fits",
-            n_before, len(dz_tab))
-    else:
-        log.info(
-            "Loaded %d rows"
-            " (no z1toz6_bad_fit column)",
-            n_before)
+    from astropy.table import vstack
+    tables = []
+    for p in parquet_paths:
+        t = QTable.read(p)
+        n_before = len(t)
+        if 'z1toz6_bad_fit' in t.colnames:
+            t = t[t['z1toz6_bad_fit'] == 0.]
+            log.info(
+                "Loaded %s: %d rows, "
+                "kept %d after filtering",
+                p, n_before, len(t))
+        else:
+            log.info(
+                "Loaded %s: %d rows "
+                "(no z1toz6_bad_fit column)",
+                p, n_before)
+        tables.append(t)
 
-    return dz_tab
+    if len(tables) == 1:
+        return tables[0]
+    combined = vstack(tables)
+    log.info(
+        "Combined %d tables: %d total rows",
+        len(tables), len(combined))
+    return combined
 
 
-def group_by_rotator_angle(dz_tab, tolerance=1.0):
-    """Group observations by rotator angle, sorted by angle.
+def filter_dz_data(dz_tab, column_names, values, tolerance=1.0):
+    """Filter rows where each named column matches its target value
+    within ``tolerance``. Only the columns given are applied, so callers
+    can filter on one or more columns independently.
+
+    Parameters
+    ----------
+    dz_tab : table-like
+    column_names : list of str
+        Columns to filter on. ``"alt"`` is converted rad -> deg before
+        comparison (so pass ``values`` in degrees).
+    values : list of float
+        Target value per column, same length as ``column_names``.
+    tolerance : float
+        Absolute tolerance in degrees (or native units for non-alt).
 
     Returns
     -------
-    rot_groups : list of list of int
-        Index groups sorted by mean rotator angle.
-    rotang_labels : list of str
-        Rounded mean angle label per group.
+    QTable
     """
-    rot_groups_unordered = group_by_tolerance(dz_tab['rotator_angle'], tolerance)
+    if not column_names:
+        return dz_tab
+    if len(column_names) != len(values):
+        raise ValueError(
+            "filter_dz_data: column_names and values must have "
+            f"the same length (got {len(column_names)} vs "
+            f"{len(values)})")
+    mask = np.ones(len(dz_tab), dtype=bool)
+    for col, val in zip(column_names, values):
+        mult = 180. / np.pi if col == 'alt' else 1.
+        col_vals = mult * np.asarray(dz_tab[col])
+        mask &= np.abs(col_vals - val) <= tolerance
+    log.info(
+        "Filter %s: %d rows -> %d rows",
+        dict(zip(column_names, values)),
+        len(dz_tab), int(mask.sum()))
+    return dz_tab[mask]
 
-    # Sort groups by mean rotator angle
-    mean_angles = [np.mean(np.asarray(dz_tab['rotator_angle'])[g])
-                   for g in rot_groups_unordered]
-    order = np.argsort(mean_angles)
-    rot_groups = [rot_groups_unordered[i] for i in order]
 
-    rotang_labels = []
-    for group in rot_groups:
-        angle = np.round(np.mean(np.asarray(dz_tab['rotator_angle'])[group]))
-        rotang_labels.append(f"rot={angle:.0f}")
+def group_by_column_vals(dz_tab, column_names, tolerance=1.0):
+    """Group and sort observations by semi-unique (within set tolerance)
+    values across one or more columns.
+
+    When multiple columns are given, rows are grouped by the Cartesian
+    product of per-column bins (e.g. one group per (alt, rot) combo).
+
+    Parameters
+    ----------
+    dz_tab : table-like
+    column_names : str or list of str
+        Column(s) to group by. ``"alt"`` is converted rad -> deg.
+    tolerance : float
+        Shared tolerance (in degrees) for per-column single-linkage
+        clustering.
+
+    Returns
+    -------
+    groups : list of list of int
+        Index groups, sorted lexicographically by per-column mean values
+        in the order given.
+    labels : list of str
+        Group labels like ``"alt=70, rotator_angle=0"``.
+    """
+    if isinstance(column_names, str):
+        column_names = [column_names]
+
+    per_col_vals = []
+    per_col_labels = []
+    for col in column_names:
+        mult = 180. / np.pi if col == 'alt' else 1.
+        vals = mult * np.asarray(dz_tab[col])
+        per_col_vals.append(vals)
+        per_col_labels.append(assign_groups(vals, tolerance))
+
+    composite = np.stack(per_col_labels, axis=1)
+    _, inverse = np.unique(composite, axis=0, return_inverse=True)
+
+    n_groups = int(inverse.max()) + 1 if len(inverse) else 0
+    groups_unordered = [
+        np.where(inverse == gid)[0].tolist()
+        for gid in range(n_groups)
+    ]
+
+    # Sort groups lexicographically by per-column mean value
+    sort_keys = [
+        tuple(np.mean(v[g]) for v in per_col_vals)
+        for g in groups_unordered
+    ]
+    order = sorted(range(len(groups_unordered)),
+                   key=lambda i: sort_keys[i])
+    groups = [groups_unordered[i] for i in order]
+
+    labels = []
+    for g in groups:
+        parts = [
+            f"{col}={int(np.round(np.mean(v[g])))}"
+            for col, v in zip(column_names, per_col_vals)
+        ]
+        labels.append(", ".join(parts))
 
     log.info(
-        "Found %d rotator angle groups: %s",
-        len(rot_groups),
-        ", ".join(rotang_labels))
-    for i, group in enumerate(rot_groups):
-        log.debug(
-            "  %s: %d observations",
-            rotang_labels[i], len(group))
+        "Found %d groups across %s: %s",
+        len(groups), column_names,
+        "; ".join(labels))
+    for i, g in enumerate(groups):
+        log.debug("  %s: %d observations", labels[i], len(g))
 
-    return rot_groups, rotang_labels
+    return groups, labels
 
 
 def compact_index_str(indices):
@@ -188,12 +280,22 @@ def build_version_string(
     return "_".join(parts)
 
 
-def main():
+def build_parser():
+    """Build the CLI parser for run_dz_to_dof.
+
+    Factored out so callers (notably run_grid.py)
+    can reuse it to inherit all CLI options
+    automatically.
+    """
     parser = argparse.ArgumentParser(
         description="Solve DZ-to-DOF inversion and produce all plots."
     )
-    parser.add_argument("parquet_file",
-                        help="Path to DZ coefficient parquet file")
+    parser.add_argument("parquet_file", nargs="+",
+                        help="One or more DZ coefficient parquet files "
+                        "(rows are concatenated if multiple)")
+    parser.add_argument("--dataset_name", type=str, default=None,
+                        help="Subdir name under --output "
+                        "(required when >1 parquet file)")
     parser.add_argument("--pupil_indices", nargs="+", type=int,
                         default=DEFAULT_PUPIL_INDICES,
                         help="Pupil Zernike indices to use")
@@ -206,8 +308,27 @@ def main():
     parser.add_argument("--renorm", type=str, default=None,
                         choices=["orig", "geom"],
                         help="Normalization scheme for the sensitivity matrix")
-    parser.add_argument("--rot_tolerance", type=float, default=1.0,
-                        help="Tolerance for grouping rotator angles (degrees)")
+    parser.add_argument("--group_col_name", type=str, nargs='+',
+                        default=["alt"],
+                        choices=["rotator_angle", "alt"],
+                        help=("Column name(s) in the input parquet to "
+                        "group observations by. Pass multiple to group "
+                        "by combos (e.g. alt rotator_angle)."))
+    parser.add_argument("--group_tolerance", type=float, default=1.0,
+                        help="Tolerance for grouping by column value")
+    parser.add_argument("--filter_col_name", type=str, nargs='+',
+                        default=None,
+                        choices=["rotator_angle", "alt"],
+                        help=("Column(s) to pre-filter rows on. "
+                        "Pair with --filter_val (same count). E.g. "
+                        "--filter_col_name rotator_angle "
+                        "--filter_val 0 keeps only rot=0 rows."))
+    parser.add_argument("--filter_val", type=float, nargs='+',
+                        default=None,
+                        help=("Target value(s) for --filter_col_name "
+                        "(degrees for alt)."))
+    parser.add_argument("--filter_tolerance", type=float, default=1.0,
+                        help="Tolerance for --filter_val match (deg)")
     parser.add_argument("--rcond", type=float, default=1e-4,
                         help="Cutoff for small singular values in lstsq")
     parser.add_argument("--rank", type=int, default=None,
@@ -241,6 +362,11 @@ def main():
     parser.add_argument("--skip-vmodes",
                         action="store_true",
                         help="Skip V-mode heatmap")
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if (args.rank is not None
@@ -279,10 +405,18 @@ def run_single(args, ofc_data=None):
     )
     ver = f"_{version}"
 
-    # Output dir: <base>/<parquet_basename>/
-    parquet_basename = Path(args.parquet_file).stem
+    # Output dir: <base>/<dataset_name>/<version>/
+    if args.dataset_name is not None:
+        dataset_basename = args.dataset_name
+    elif len(args.parquet_file) == 1:
+        dataset_basename = (
+            Path(args.parquet_file[0]).stem)
+    else:
+        raise ValueError(
+            "--dataset_name is required when "
+            "more than one parquet file is given")
     output_dir = (
-        Path(args.output) / parquet_basename
+        Path(args.output) / dataset_basename
         / version)
     output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -393,6 +527,10 @@ def _run_body(
 
     log.info("Loading DZ coefficients")
     dz_tab = load_dz_data(args.parquet_file)
+    if args.filter_col_name:
+        dz_tab = filter_dz_data(
+            dz_tab, args.filter_col_name, args.filter_val,
+            tolerance=args.filter_tolerance)
     dates = np.unique(dz_tab['day_obs'])
 
     # --- Sensitivity matrix heatmaps ---
@@ -427,10 +565,10 @@ def _run_body(
 
     # --- Group by rotator angle ---
     log.info("Grouping by rotator angle")
-    rot_groups, rotang_labels = (
-        group_by_rotator_angle(
+    rot_groups, rotang_labels = group_by_column_vals(
             dz_tab,
-            tolerance=args.rot_tolerance))
+            column_names=args.group_col_name,
+            tolerance=args.group_tolerance)
 
     # --- Compute median DZ per group ---
     log.info("Computing median DZ per group")

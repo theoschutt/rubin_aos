@@ -705,7 +705,13 @@ def flat_to_dz_matrix(flat, n_focal, n_pupil):
 
 
 def group_by_tolerance(values, tolerance=1.0):
-    """Group values that fall within *tolerance* of each other.
+    """Group values via single-linkage clustering:
+    break groups where adjacent sorted values
+    differ by more than ``tolerance``.
+
+    This chains through near-by values (so
+    [-45.3, -44.9, -44.5] is one group at
+    tolerance=1), and is order-independent.
 
     Parameters
     ----------
@@ -715,17 +721,21 @@ def group_by_tolerance(values, tolerance=1.0):
     Returns
     -------
     list of list of int
-        Each inner list contains indices of values in one group.
+        Each inner list contains indices of
+        values in one group.
     """
     values = np.asarray(values)
-    used = np.zeros(len(values), dtype=bool)
+    n = len(values)
+    if n == 0:
+        return []
+    order = np.argsort(values)
+    breaks = np.diff(values[order]) > tolerance
+    group_ids = np.concatenate(
+        ([0], np.cumsum(breaks)))
     groups = []
-    for i in range(len(values)):
-        if used[i]:
-            continue
-        close_mask = np.isclose(values, values[i], atol=tolerance, rtol=0)
-        groups.append(np.where(close_mask)[0].tolist())
-        used[close_mask] = True
+    for gid in range(int(group_ids[-1]) + 1):
+        mask = group_ids == gid
+        groups.append(order[mask].tolist())
     return groups
 
 

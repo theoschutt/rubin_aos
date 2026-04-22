@@ -6,15 +6,30 @@ and normalization schemes.
 Runs iterations in-process so the OFC data load
 (or module imports) is paid at most once.
 
+All CLI arguments accepted by ``run_dz_to_dof.py``
+are also accepted here (and applied to every
+iteration).  Grid-specific extras: ``--config``
+and ``--dry-run``.
+
+The config JSON may include any of:
+  * ``dof_sets``:     {name: [indices, ...]}
+  * ``rcond_values``: [floats]
+  * ``rank_values``:  [ints]
+  * ``norm_schemes``: [null | "orig" | "geom", ...]
+  * ``run_args``:     dict of default arg values
+                      applied to every run (CLI
+                      overrides if both given)
+
+Each config entry in ``rcond_values`` /
+``rank_values`` contributes one run per
+(dof_set, norm) combo.
+
 Usage
 -----
     python run_grid.py <parquet_file> \
         [--config grid_config.json] \
         [-o output_dir] [--dry-run]
-
-The config JSON may have ``rcond_values``,
-``rank_values``, or both.  Each listed value
-becomes one run per (dof_set, norm) combo.
+        [<any run_dz_to_dof option>]
 """
 import argparse
 import copy
@@ -41,6 +56,9 @@ def load_config(path):
     dof_sets : dict
     mode_specs : list of (str, value)
     norm_schemes : list
+    run_defaults : dict
+        Values to apply as parser defaults
+        (overridable by CLI).
     """
     with open(path) as f:
         cfg = json.load(f)
@@ -59,115 +77,65 @@ def load_config(path):
         cfg["dof_sets"],
         mode_specs,
         cfg["norm_schemes"],
+        cfg.get("run_args", {}),
     )
 
 
-def _base_defaults():
-    """Build an argparse.Namespace with all the
-    fields run_dz_to_dof.run_single expects,
-    populated from the main parser's defaults.
-    """
-    # Pre-parse with no extra args to get defaults
-    # (requires a placeholder for the positional
-    # parquet_file; we overwrite it per run).
-    import sys
-    saved = sys.argv
-    try:
-        sys.argv = ["run_dz_to_dof.py", "PLACEHOLDER"]
-        # Build the parser the same way main() does
-        # by calling main() up to parse_args is
-        # awkward; instead, construct a Namespace
-        # manually with all defaults.
-    finally:
-        sys.argv = saved
-    # Build Namespace with the same defaults as
-    # run_dz_to_dof.main()'s argparse.
-    from run_dz_to_dof import (
-        DEFAULT_PUPIL_INDICES,
-        DEFAULT_FOCAL_INDICES,
-        DEFAULT_DOF_INDICES,
-    )
-    return argparse.Namespace(
-        parquet_file=None,
-        pupil_indices=DEFAULT_PUPIL_INDICES,
-        focal_indices=DEFAULT_FOCAL_INDICES,
-        dof_indices=DEFAULT_DOF_INDICES,
-        renorm=None,
-        rot_tolerance=1.0,
-        rcond=1e-4,
-        rank=None,
-        smatrix_file=None,
-        weights_file=None,
-        output="dz_to_dof_results",
-        dof_name=None,
-        version=None,
-        skip_sensitivity=False,
-        skip_dz=False,
-        skip_vmodes=False,
-    )
-
-
-def build_args(
-    parquet_file, dof_name, dof_indices,
-    norm, mode, mode_value,
-    skip_flags, output_dir,
-    smatrix_file=None, weights_file=None,
-):
-    """Build a Namespace for one grid iteration."""
-    args = _base_defaults()
-    args.parquet_file = parquet_file
-    args.dof_indices = list(dof_indices)
-    args.dof_name = dof_name
-    args.renorm = norm
-    args.output = output_dir
-    args.smatrix_file = smatrix_file
-    args.weights_file = weights_file
-    if mode == "rank":
-        args.rank = mode_value
-    else:
-        args.rcond = mode_value
-    args.skip_sensitivity = (
-        "--skip-sensitivity" in skip_flags)
-    args.skip_dz = (
-        "--skip-dz" in skip_flags)
-    args.skip_vmodes = (
-        "--skip-vmodes" in skip_flags)
-    return args
+def _peek_config_path():
+    """Peek at --config before full parsing so we
+    can apply the config's run_args as parser
+    defaults."""
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument(
+        "--config", default="grid_config.json")
+    pre_args, _ = pre.parse_known_args()
+    return pre_args.config
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run DZ-to-DOF grid sweep.")
-    parser.add_argument("parquet_file",
-                        help="Path to parquet file")
+    # Peek at --config so we can apply its
+    # run_args as parser defaults BEFORE parsing.
+    # Tolerate missing file (e.g. --help) by
+    # falling back to empty defaults.
+    config_path = _peek_config_path()
+    try:
+        (dof_sets, mode_specs, norm_schemes,
+         run_defaults) = load_config(config_path)
+        config_loaded = True
+    except FileNotFoundError:
+        dof_sets = mode_specs = norm_schemes = None
+        run_defaults = {}
+        config_loaded = False
+
+    # Reuse run_dz_to_dof's parser so every CLI
+    # arg is accepted automatically.
+    parser = run_dz_to_dof.build_parser()
+    parser.description = (
+        "Run DZ-to-DOF grid sweep.")
     parser.add_argument(
         "--config", default="grid_config.json",
         help="Path to grid config JSON")
     parser.add_argument(
-        "-o", "--output",
-        default="dz_to_dof_results",
-        help="Output directory")
-    parser.add_argument(
-        "--smatrix_file", type=str, default=None,
-        help="YAML spec for a cached smatrix "
-        "(bypasses OFC load if combined with "
-        "--weights_file)")
-    parser.add_argument(
-        "--weights_file", type=str, default=None,
-        help="YAML with precomputed norm weights "
-        "(per-run; applied to all grid points)")
-    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print config without running")
+    # Apply run_args from config as defaults
+    # (CLI-specified values still win).
+    if run_defaults:
+        parser.set_defaults(**run_defaults)
+
     args = parser.parse_args()
 
-    (dof_sets, mode_specs, norm_schemes) = (
-        load_config(args.config))
+    if not config_loaded:
+        parser.error(
+            f"config file not found: "
+            f"{config_path}")
 
-    # Decide whether we need OFC up front.  If
-    # smatrix_file is given but weights_file is
-    # not, OFC is only needed when a renorm is
-    # used; we load lazily in that case.
+    if (len(args.parquet_file) > 1
+            and args.dataset_name is None):
+        parser.error(
+            "--dataset_name is required when "
+            "more than one parquet file is given")
+
     ofc_data = None
 
     # Track what's been plotted for skip flags
@@ -192,35 +160,41 @@ def main():
 
             for mode, mode_value in mode_specs:
                 n_total += 1
-                skip_flags = []
 
-                sens_key = (norm_str,)
-                if sens_key in seen_sens:
-                    skip_flags.append(
-                        "--skip-sensitivity")
+                # Build this iteration's args by
+                # copying the parsed Namespace
+                # and overwriting the per-iter
+                # fields.
+                run_args = copy.copy(args)
+                run_args.dof_indices = list(
+                    dof_indices)
+                run_args.dof_name = dof_name
+                run_args.renorm = norm
+                if mode == "rank":
+                    run_args.rank = mode_value
+                    run_args.rcond = (
+                        parser.get_default(
+                            "rcond"))
                 else:
+                    run_args.rcond = mode_value
+                    run_args.rank = None
+
+                # Skip-flag bookkeeping
+                sens_key = (norm_str,)
+                run_args.skip_sensitivity = (
+                    sens_key in seen_sens)
+                if not run_args.skip_sensitivity:
                     seen_sens.add(sens_key)
 
-                if seen_dz:
-                    skip_flags.append("--skip-dz")
-                else:
+                run_args.skip_dz = seen_dz
+                if not seen_dz:
                     seen_dz = True
 
                 vm_key = (dof_name, norm_str)
-                if vm_key in seen_vmodes:
-                    skip_flags.append(
-                        "--skip-vmodes")
-                else:
+                run_args.skip_vmodes = (
+                    vm_key in seen_vmodes)
+                if not run_args.skip_vmodes:
                     seen_vmodes.add(vm_key)
-
-                run_args = build_args(
-                    args.parquet_file,
-                    dof_name, dof_indices,
-                    norm, mode, mode_value,
-                    skip_flags, args.output,
-                    smatrix_file=args.smatrix_file,
-                    weights_file=args.weights_file,
-                )
 
                 log.info(
                     "=" * 60 + "\n"
