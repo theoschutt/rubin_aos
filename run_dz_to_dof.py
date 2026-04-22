@@ -649,11 +649,34 @@ def _run_body(
         mode_str = (f"rcond: {args.rcond}, "
                     f"rank: {rank}/{n_dof_sel}")
 
+    filter_str = ""
+    if args.filter_col_name:
+        group_cols = set(args.group_col_name or [])
+        extra = [
+            (col, vals) for col, vals
+            in zip(args.filter_col_name, args.filter_val)
+            if col not in group_cols
+        ]
+        if extra:
+            parts = []
+            for col, vals in extra:
+                vs = np.atleast_1d(vals).astype(float)
+                if len(vs) == 1:
+                    parts.append(f"{col}={vs[0]:g}")
+                else:
+                    joined = ",".join(f"{v:g}" for v in vs)
+                    parts.append(f"{col}∈" + "{" + joined + "}")
+            filter_str = "Filter: " + ", ".join(parts)
+
+    def _with_filter(title):
+        return f"{title}\n{filter_str}" if filter_str else title
+
     plot_dof_datasets(
         dof_hat_list, rotang_labels, colors,
-        (f"Reconstructed DOFs\n"
-         f"{renorm_str}, {mode_str}"
-         f"\nDates: {dates}\n{zk_str}"),
+        _with_filter(
+            f"Reconstructed DOFs\n"
+            f"{renorm_str}, {mode_str}"
+            f"\nDates: {dates}\n{zk_str}"),
         output_dir / f"dof_solution{ver}.pdf",
         dof_indices=args.dof_indices,
     )
@@ -662,25 +685,27 @@ def _run_body(
         plot_dz_datasets(
             dz_arr_list, pupil_indices,
             rotang_labels, colors,
-            f"DZ Coefficients\nDates: {dates}",
+            _with_filter(f"DZ Coefficients\nDates: {dates}"),
             output_dir / f"dz_coefficients{ver}.pdf",
         )
 
     plot_dz_datasets(
         rec_dz_list, pupil_indices,
         rotang_labels, colors,
-        (f"Reconstructed DZ Coefficients\n"
-         f"{renorm_str}, {mode_str}"
-         f"\nDates: {dates}\nDOF: {dof_str}"),
+        _with_filter(
+            f"Reconstructed DZ Coefficients\n"
+            f"{renorm_str}, {mode_str}"
+            f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_reconstructed{ver}.pdf",
     )
 
     plot_dz_datasets(
         d_dz_list, pupil_indices,
         rotang_labels, colors,
-        (f"DZ Coefficient Residuals\n"
-         f"{renorm_str}, {mode_str}"
-         f"\nDates: {dates}\nDOF: {dof_str}"),
+        _with_filter(
+            f"DZ Coefficient Residuals\n"
+            f"{renorm_str}, {mode_str}"
+            f"\nDates: {dates}\nDOF: {dof_str}"),
         output_dir / f"dz_residuals{ver}.pdf",
         fixed_y=True,
     )
