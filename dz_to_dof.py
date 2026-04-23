@@ -32,16 +32,14 @@ log = logging.getLogger("dz_to_dof")
 # Constants
 # ---------------------------------------------------------------------------
 
+"""DOF names in OFC ordering."""
 DOF_LABELS = (
-    ["M2_hex_z", "M2_hex_x", "M2_hex_y",
-     "M2_hex_rx", "M2_hex_ry",
-     "Cam_hex_z", "Cam_hex_x", "Cam_hex_y",
-     "Cam_hex_rx", "Cam_hex_ry"]
+    ["M2_hex_z", "M2_hex_x", "M2_hex_y", "M2_hex_rx", "M2_hex_ry",
+     "Cam_hex_z", "Cam_hex_x", "Cam_hex_y", "Cam_hex_rx", "Cam_hex_ry"]
     + [f"M1M3_B{i}" for i in range(1, 21)]
     + ["M1M3_B52"]
     + [f"M2_B{i}" for i in range(1, 21)]
 )
-"""DOF names in OFC ordering."""
 
 N_DOF = len(DOF_LABELS)
 
@@ -75,8 +73,7 @@ class DZtoDOFSolver:
     focal_indices : list of int
         Focal Zernike indices to use.
     dof_indices : list of int or None
-        Which DOFs to solve for.
-        ``None`` means all N_DOF.
+        Which DOFs to solve for. ``None`` means all N_DOF.
     norm_type : str or None
         ``'orig'``, ``'geom'``, or ``None``.
     """
@@ -109,15 +106,13 @@ class DZtoDOFSolver:
             self.dof_indices = np.asarray(dof_indices)
 
         # Load, normalize, and slice the sensitivity matrix.
-        sliced, full_coef, renorm_full = (
-            load_sensitivity_matrix(
+        sliced, full_coef, renorm_full = load_sensitivity_matrix(
                 ofc_data,
                 focal_indices,
                 pupil_indices,
                 norm_type=norm_type,
                 smatrix_override=smatrix_override,
                 weights_override=weights_override,
-            )
         )
         self.full_coef = full_coef
         self.renorm_full_coef = renorm_full
@@ -141,11 +136,9 @@ class DZtoDOFSolver:
             ``'dz_residual'``, ``'rank'``, ``'singular_values'``.
         """
         if self.rank is not None:
-            x_sub, rank, svals = self._solve_rank(
-                dz_matrix)
+            x_sub, rank, svals = self._solve_rank(dz_matrix)
         else:
-            x_sub, _, rank, svals = solve_dof(
-                self.A, dz_matrix, self.rcond)
+            x_sub, _, rank, svals = solve_dof(self.A, dz_matrix, self.rcond)
 
         recon_flat = self.A @ x_sub
         dz_recon = flat_to_dz_matrix(recon_flat, self.n_focal, self.n_pupil)
@@ -155,16 +148,14 @@ class DZtoDOFSolver:
         dz_resid = flat_to_dz_matrix(resid_flat, self.n_focal, self.n_pupil)
 
         # Reverse normalization on the subset.
-        if (self.norm_type is not None
-                or self.weights_override is not None):
+        if (self.norm_type is not None or self.weights_override is not None):
             x_phys_sub = reverse_normalization(
                 self.ofc_data,
                 x_sub,
                 self.norm_type,
                 self.full_coef,
                 self.dof_indices,
-                weights_override=(
-                    self.weights_override),
+                weights_override=self.weights_override,
             )
         else:
             x_phys_sub = x_sub
@@ -184,16 +175,14 @@ class DZtoDOFSolver:
     def _solve_rank(self, dz_matrix):
         """Solve via rank-k truncated SVD.
 
-        Uses cached SVD to form the truncated
-        pseudoinverse A_k^+ = V[:,:k] diag(1/s[:k])
-        U[:,:k]^T, then applies it to y.
+        Uses cached SVD to form the truncated pseudoinverse
+        A_k^+ = V[:,:k] diag(1/s[:k]) U[:,:k]^T,
+        then applies it to y.
         """
         U, s, Vt = self.svd()
         k = min(self.rank, len(s))
         y = dz_matrix_to_flat(dz_matrix)
-        x_sub = (
-            Vt[:k].T
-            @ ((U[:, :k].T @ y) / s[:k]))
+        x_sub = Vt[:k].T @ ((U[:, :k].T @ y) / s[:k])
         return x_sub, k, s
 
     def svd(self):
@@ -207,14 +196,12 @@ class DZtoDOFSolver:
             where k = min(m, n).
         """
         if not hasattr(self, '_svd_cache'):
-            self._svd_cache = np.linalg.svd(
-                self.A, full_matrices=False)
+            self._svd_cache = np.linalg.svd(self.A, full_matrices=False)
         return self._svd_cache
 
     @property
     def effective_rank(self):
-        """Number of singular values kept
-        (rcond or rank mode)."""
+        """Number of singular values kept (rcond or rank mode)."""
         _, s, _ = self.svd()
         if self.rank is not None:
             return min(self.rank, len(s))
@@ -268,76 +255,58 @@ def load_ofc_data():
     return ofc_data
 
 def pad_ofc_array(arr, fill_value=1.0):
-    """Pad a 50-element OFC array (normalization
-    weights, range weights, etc.) to N_DOF by
-    inserting ``fill_value`` at the B52 slot.
+    """Pad a 50-element OFC array (normalization weights, range weights,
+    etc.) to N_DOF by inserting ``fill_value`` at the B52 slot.
 
     Returns ``arr`` unchanged if already N_DOF-long.
-    Default fill is 1.0 (neutral multiplier);
-    only affects results if B52 is selected, which
-    is guarded against elsewhere.
+    Default fill is 1.0 (neutral multiplier); only affects results if B52
+    is selected, which is guarded against elsewhere.
     """
     arr = np.asarray(arr)
     if len(arr) == N_DOF:
         return arr
     if len(arr) != N_DOF - 1:
         raise ValueError(
-            f"Cannot pad array of length "
-            f"{len(arr)} to N_DOF ({N_DOF})")
+            f"Cannot pad array of length {len(arr)} to N_DOF ({N_DOF})")
     b52_idx = IDX_M1M3_START + N_M1M3_BEND - 1
     return np.insert(arr, b52_idx, fill_value)
 
 
 def load_smatrix_yaml(yaml_path):
-    """Load a custom sensitivity matrix from a YAML
-    spec + .npy sidecar.
+    """Load a custom sensitivity matrix from a YAML spec + .npy sidecar.
 
     YAML format
     -----------
-    dof_labels: [list of N_DOF strings matching
-                 module-level DOF_LABELS]
-    smatrix_npy: path to .npy file with
-                 full_coef array of shape
+    dof_labels: [list of N_DOF strings matching module-level DOF_LABELS]
+    smatrix_npy: path to .npy file with full_coef array of shape
                  (n_f_full, n_p_full, N_DOF)
 
-    The .npy path is resolved relative to the
-    YAML file's directory.
+    The .npy path is resolved relative to the YAML file's directory.
     """
     import yaml
     yaml_path = Path(yaml_path)
     with open(yaml_path) as f:
         spec = yaml.safe_load(f)
     if spec["dof_labels"] != list(DOF_LABELS):
-        raise ValueError(
-            "YAML dof_labels do not match "
-            "module-level DOF_LABELS")
-    npy_path = (
-        yaml_path.parent / spec["smatrix_npy"])
+        raise ValueError("YAML dof_labels do not match module-level DOF_LABELS")
+    npy_path = yaml_path.parent / spec["smatrix_npy"]
     full_coef = np.load(npy_path)
     if full_coef.shape[-1] != N_DOF:
         raise ValueError(
-            f"smatrix last axis "
-            f"{full_coef.shape[-1]} != "
-            f"N_DOF ({N_DOF})")
+            f"smatrix last axis {full_coef.shape[-1]} != N_DOF ({N_DOF})")
     log.info(
-        "Loaded smatrix from %s (shape %s)",
-        npy_path, full_coef.shape)
+        "Loaded smatrix from %s (shape %s)", npy_path, full_coef.shape)
     return full_coef
 
 
 def load_weights_yaml(yaml_path):
-    """Load precomputed final normalization weights
-    from a YAML file.
+    """Load precomputed final normalization weights from a YAML file.
 
-    YAML format: a flat list of N_DOF (or N_DOF-1)
-    floats at the top level.  If the array is
-    50-long, it is auto-padded to N_DOF (B52 slot
-    filled with 1.0).
+    YAML format: a flat list of N_DOF (or N_DOF-1) floats at the top level.
+    If array is 50-long, it is auto-padded to N_DOF (B52 slot filled with 1.0).
 
-    Alternatively supports a dict with a
-    ``normalization_weights`` key for backward
-    compatibility with older files that include
-    a metadata block.
+    Alternatively supports a dict with a ``normalization_weights`` key for
+    backward compatibility with older files that include a metadata block.
     """
     import yaml
     with open(yaml_path) as f:
@@ -347,23 +316,18 @@ def load_weights_yaml(yaml_path):
     else:
         weights = spec
     weights = pad_ofc_array(np.asarray(weights))
-    log.info(
-        "Loaded weights from %s (%d elements)",
-        yaml_path, len(weights))
+    log.info("Loaded weights from %s (%d elements)", yaml_path, len(weights))
     return weights
 
 
 def load_sensitivity_matrix(
-    ofc_data, focal_indices, pupil_indices,
-    norm_type=None, smatrix_override=None,
-    weights_override=None,
+    ofc_data, focal_indices, pupil_indices, norm_type=None,
+    smatrix_override=None, weights_override=None,
 ):
-    """Load, slice and optionally renormalize
-    the sensitivity matrix.
+    """Load, slice and optionally renormalize the sensitivity matrix.
 
-    If ``smatrix_override`` is None, loads from
-    OFC data (padded to N_DOF if it is 50-wide,
-    inserting a zero column at index
+    If ``smatrix_override`` is None, loads from OFC data (padded to N_DOF if 
+    it is 50-wide, inserting a zero column at index
     IDX_M1M3_START + N_M1M3_BEND - 1 for B52).
     Otherwise uses the provided full_coef array.
 
@@ -375,8 +339,7 @@ def load_sensitivity_matrix(
     norm_type : str or None
         ``'orig'``, ``'geom'``, or None.
     smatrix_override : ndarray or None
-        Pre-loaded full_coef array with
-        shape (n_f_full, n_p_full, N_DOF).
+        Pre-loaded full_coef array with shape (n_f_full, n_p_full, N_DOF).
 
     Returns
     -------
@@ -393,38 +356,26 @@ def load_sensitivity_matrix(
         import galsim
         ideal_sens_dz = galsim.zernike.DoubleZernike(
             ofc_data.sensitivity_matrix[..., :],
-            uv_inner=ofc_data.config[
-                "field"]["radius_inner"],
-            uv_outer=ofc_data.config[
-                "field"]["radius_outer"],
-            xy_inner=ofc_data.config[
-                "pupil"]["radius_inner"],
-            xy_outer=ofc_data.config[
-                "pupil"]["radius_outer"],
+            uv_inner=ofc_data.config["field"]["radius_inner"],
+            uv_outer=ofc_data.config["field"]["radius_outer"],
+            xy_inner=ofc_data.config["pupil"]["radius_inner"],
+            xy_outer=ofc_data.config["pupil"]["radius_outer"],
         )
         full_coef = ideal_sens_dz.coef
         # Pad OFC smatrix (50 DOFs) to N_DOF by
         # inserting a zero column at the B52 slot.
         if full_coef.shape[-1] == N_DOF - 1:
-            b52_idx = (
-                IDX_M1M3_START + N_M1M3_BEND - 1)
-            full_coef = np.insert(
-                full_coef, b52_idx, 0.0, axis=-1)
+            b52_idx = IDX_M1M3_START + N_M1M3_BEND - 1
+            full_coef = np.insert(full_coef, b52_idx, 0.0, axis=-1)
             log.info(
-                "Padded OFC smatrix to %d DOFs"
-                " (zero column at index %d"
-                " for B52)",
+                "Padded OFC smatrix to %d DOFs "
+                "(zero column at index %d for B52)",
                 N_DOF, b52_idx)
-    log.debug(
-        "Full sensitivity matrix shape: %s",
-        full_coef.shape)
+    log.debug("Full sensitivity matrix shape: %s", full_coef.shape)
 
-    if (norm_type is not None
-            or weights_override is not None):
+    if (norm_type is not None or weights_override is not None):
         renorm_full_coef = renormalize_sensitivity_matrix(
-            ofc_data, full_coef, norm_type,
-            weights_override=weights_override,
-        )
+            ofc_data, full_coef, norm_type, weights_override=weights_override)
     else:
         renorm_full_coef = None
 
@@ -444,16 +395,13 @@ def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
     elif norm_type == "orig":
         # The normalization is defined in Eqs 9-11 of
         # https://ui.adsabs.harvard.edu/abs/2024ApJ...974..108M
-        nw = pad_ofc_array(
-            ofc_data.normalization_weights)
+        nw = pad_ofc_array(ofc_data.normalization_weights)
         norm_matrix = np.diag(nw[dof_indices])
     elif norm_type == "geom":
-        r_i, f_i, _ = get_rf_weights(
-            ofc_data, orig_smatrix, dof_indices)
+        r_i, f_i, _ = get_rf_weights(ofc_data, orig_smatrix, dof_indices)
         norm_matrix = np.diag(np.sqrt(r_i / f_i))
     elif norm_type is None:
-        norm_matrix = np.diag(
-            np.ones_like(dof_indices))
+        norm_matrix = np.diag(np.ones_like(dof_indices))
 
     return orig_smatrix @ norm_matrix
 
@@ -476,9 +424,7 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
         norm_vector = nw[dof_indices]
     elif norm_type == "geom":
         if orig_smatrix is None:
-            raise ValueError(
-                "orig_smatrix is required for geom normalization"
-            )
+            raise ValueError("orig_smatrix is required for geom normalization")
         r_vec, f_vec, _ = get_rf_weights(ofc_data, orig_smatrix, dof_indices)
         norm_vector = np.sqrt(r_vec / f_vec)
     elif norm_type is None:
@@ -498,21 +444,16 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
     m1m3_bmf = BendModeToForce('M1M3', ofc_data)
     m2_bmf = BendModeToForce('M2', ofc_data)
 
-    # NOTE: geom normalization is not strictly
-    # valid when B52 is selected; the B52 slot uses
-    # a placeholder weight because OFC force range
-    # data does not include B52.  The CLI guard
-    # against (--renorm + B52) avoids this, but
-    # code paths that bypass that guard must not
-    # rely on range_weights[B52_idx] being
-    # physically meaningful.
-    range_weights = np.concatenate((  # N_DOF wts
+    # NOTE: geom normalization is not strictly valid when B52 is selected;
+    # the B52 slot uses a placeholder weight because OFC force range data
+    # does not include B52.  The CLI guard against (--renorm + B52) avoids this,
+    # but code paths that bypass that guard must not rely on
+    # range_weights[B52_idx] being physically meaningful.
+    range_weights = np.concatenate((
         ofc_data.rb_stroke,
-        m1m3_bending_range / np.max(
-            np.abs(m1m3_bmf.rot_mat), axis=0),
+        m1m3_bending_range / np.max(np.abs(m1m3_bmf.rot_mat), axis=0),
         [1.0],  # placeholder for B52
-        m2_bending_range / np.max(
-            np.abs(m2_bmf.rot_mat), axis=0),
+        m2_bending_range / np.max(np.abs(m2_bmf.rot_mat), axis=0),
     ))
 
     # Compute FWHM weights f_i (L2 norm over all focal/pupil pairs, per DOF)
@@ -526,56 +467,32 @@ def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
         fwhm.reshape(n_f, n_d, n_p).transpose(0, 2, 1).reshape(n_f * n_p, n_d)
     )
     # equiv to sqrt(sum(fwhm_2d**2, axis=0))
-    fwhm_weights = np.linalg.norm(  # all N_DOF weights
-        fwhm_2d, axis=0
-    )
-    # Guard against zero columns (e.g. the padded
-    # B52 slot in the OFC smatrix) so that
-    # sqrt(r_i / f_i) downstream does not blow up.
+    fwhm_weights = np.linalg.norm(fwhm_2d, axis=0)
+    
+    # Guard against zero columns (e.g. the padded B52 slot in the OFC smatrix)
+    # so that sqrt(r_i / f_i) downstream does not blow up.
     # A value of 1.0 acts as a neutral placeholder;
     # callers must not rely on these DOFs anyway.
-    fwhm_weights = np.where(
-        fwhm_weights == 0, 1.0, fwhm_weights)
+    fwhm_weights = np.where(fwhm_weights == 0, 1.0, fwhm_weights)
 
     # Extract for our DOFs
     r_i = range_weights[dof_indices]
     f_i = fwhm_weights[dof_indices]
-    n_default = pad_ofc_array(
-        ofc_data.normalization_weights
-    )[dof_indices]
-    dof_names = [
-        DOF_LABELS[i] for i in dof_indices]
-
-    # print('Normalization weight components for selected DOFs:')
-    # print(f'{"DOF":>10s} {"r_i (range)":>14s} {"f_i (FWHM)":>14s}'
-    #       f' {"r_i * f_i":>14s} {"n_i (stored)":>14s}')
-    # print('-' * 66)
-    # for idx, name in enumerate(dof_names):
-    #     print(f'{name:>10s} {r_i[idx]:>14.6e} {f_i[idx]:>14.6e}'
-    #           f' {r_i[idx]*f_i[idx]:>14.6e} {n_default[idx]:>14.6e}')
-
-    # print(f'\nPhysical interpretation:')
-    # for idx, name in enumerate(dof_names):
-    #     print(f'  {name}: range = {r_i[idx]:.4f} (physical stroke), '
-    #         f'FWHM sensitivity = {f_i[idx]:.4f} arcsec FWHM/unit DOF')
+    n_default = pad_ofc_array(ofc_data.normalization_weights)[dof_indices]
+    dof_names = [DOF_LABELS[i] for i in dof_indices]
 
     # Derive stored f_i from stored normalization weights and computed r_i
     f_i_stored = n_default / r_i
 
     log.debug("Stored vs computed FWHM weights:")
-    log.debug(
-        "%10s %16s %16s %10s",
-        "DOF", "f_i (computed)",
-        "f_i (stored)", "ratio")
+    log.debug("%10s %16s %16s %10s",
+        "DOF", "f_i (computed)", "f_i (stored)", "ratio")
     log.debug("-" * 56)
     for idx, name in enumerate(dof_names):
         ratio = (f_i[idx] / f_i_stored[idx]
-                 if f_i_stored[idx] != 0
-                 else float('inf'))
-        log.debug(
-            "%10s %16.6e %16.6e %10.4f",
-            name, f_i[idx],
-            f_i_stored[idx], ratio)
+                 if f_i_stored[idx] != 0 else float('inf'))
+        log.debug("%10s %16.6e %16.6e %10.4f",
+            name, f_i[idx], f_i_stored[idx], ratio)
 
     return r_i, f_i, f_i_stored
 
@@ -699,19 +616,16 @@ def flat_to_dz_matrix(flat, n_focal, n_pupil):
     flat = np.asarray(flat)
     if flat.size != n_focal * n_pupil:
         raise ValueError(
-            f"Expected {n_focal * n_pupil} values, got {flat.size}"
-        )
+            f"Expected {n_focal * n_pupil} values, got {flat.size}")
     return flat.reshape(n_focal, n_pupil)
 
 
 def group_by_tolerance(values, tolerance=1.0):
-    """Group values via single-linkage clustering:
-    break groups where adjacent sorted values
-    differ by more than ``tolerance``.
+    """Group values via single-linkage clustering: break groups where adjacent
+    sorted values differ by more than ``tolerance``.
 
-    This chains through near-by values (so
-    [-45.3, -44.9, -44.5] is one group at
-    tolerance=1), and is order-independent.
+    This chains through near-by values (so [-45.3, -44.9, -44.5] is one group
+    at tolerance=1), and is order-independent.
 
     Parameters
     ----------
@@ -721,8 +635,7 @@ def group_by_tolerance(values, tolerance=1.0):
     Returns
     -------
     list of list of int
-        Each inner list contains indices of
-        values in one group.
+        Each inner list contains indices of values in one group.
     """
     values = np.asarray(values)
     n = len(values)
@@ -730,8 +643,7 @@ def group_by_tolerance(values, tolerance=1.0):
         return []
     order = np.argsort(values)
     breaks = np.diff(values[order]) > tolerance
-    group_ids = np.concatenate(
-        ([0], np.cumsum(breaks)))
+    group_ids = np.concatenate(([0], np.cumsum(breaks)))
     groups = []
     for gid in range(int(group_ids[-1]) + 1):
         mask = group_ids == gid
@@ -822,59 +734,44 @@ def solve_dof(A, dz_matrix, rcond):
 # =========================================================================
 
 def format_dofs(x_hat):
-    """Format DOF solution vector as a two-column
-    table string."""
+    """Format DOF solution vector as a two-column table string."""
     x_hat = np.asarray(x_hat)
     label_to_value = dict(zip(DOF_LABELS, x_hat))
 
     left_groups = [
         ("Camera hexapod", DOF_LABELS[5:N_HEX]),
-        ("M1M3 bends",
-         DOF_LABELS[IDX_M1M3_START:IDX_M2_START]),
+        ("M1M3 bends", DOF_LABELS[IDX_M1M3_START:IDX_M2_START]),
     ]
     right_groups = [
         ("M2 hexapod", DOF_LABELS[:5]),
         ("M2 bends", DOF_LABELS[IDX_M2_START:]),
     ]
 
-    left_data = _build_rows(
-        left_groups, label_to_value)
-    right_data = _build_rows(
-        right_groups, label_to_value)
+    left_data = _build_rows(left_groups, label_to_value)
+    right_data = _build_rows(right_groups, label_to_value)
 
     all_rows = [
         row
         for _, rows in (left_data + right_data)
         for row in rows]
-    label_w = max(
-        len("DOF"),
-        max(len(r[0]) for r in all_rows))
+    label_w = max(len("DOF"), max(len(r[0]) for r in all_rows))
     value_w = max(len("Value"), 14)
-    unit_w = max(
-        len("Unit"),
-        max(len(r[2]) for r in all_rows))
+    unit_w = max(len("Unit"), max(len(r[2]) for r in all_rows))
 
     left_lines = _flatten_blocks(
         left_data, label_w, value_w, unit_w)
     right_lines = _flatten_blocks(
         right_data, label_w, value_w, unit_w)
 
-    left_width = max(
-        len(line) for line in left_lines)
-    n_lines = max(
-        len(left_lines), len(right_lines))
-    left_lines += [""] * (
-        n_lines - len(left_lines))
-    right_lines += [""] * (
-        n_lines - len(right_lines))
+    left_width = max(len(line) for line in left_lines)
+    n_lines = max(len(left_lines), len(right_lines))
+    left_lines += [""] * (n_lines - len(left_lines))
+    right_lines += [""] * (n_lines - len(right_lines))
 
     gap = "   "
     lines = []
-    for l_line, r_line in zip(
-        left_lines, right_lines
-    ):
-        lines.append(
-            f"{l_line:<{left_width}}{gap}{r_line}")
+    for l_line, r_line in zip(left_lines, right_lines):
+        lines.append(f"{l_line:<{left_width}}{gap}{r_line}")
     return "\n".join(lines)
 
 
@@ -906,12 +803,14 @@ def _make_block(group_name, rows, label_w, value_w, unit_w):
 
     block = []
     block.append(line)
-    block.append(f"| {'DOF':<{label_w}} | {'Value':>{value_w}} | {'Unit':<{unit_w}} |")
+    block.append(
+        f"| {'DOF':<{label_w}} | {'Value':>{value_w}} | {'Unit':<{unit_w}} |")
     block.append(line)
     block.append(f"| {(' ' + group_name + ' '):<{group_line_w}} |")
     block.append(line)
     for label, value, unit in rows:
-        block.append(f"| {label:<{label_w}} | {value:>{value_w}.6f} | {unit:<{unit_w}} |")
+        block.append(
+            f"| {label:<{label_w}} | {value:>{value_w}.6f} | {unit:<{unit_w}} |")
     block.append(line)
     return block
 
@@ -925,34 +824,26 @@ def _flatten_blocks(grouped_blocks, label_w, value_w, unit_w):
     return lines
 
 
-def format_residuals(
-    residual_vector, focal_indices,
-    pupil_indices, tolerance=0.01,
-):
-    """Format residuals as a 2D table string
-    (pupil rows x focal columns).
+def format_residuals(residual_vector, focal_indices, pupil_indices,
+                     tolerance=0.01):
+    """Format residuals as a 2D table string (pupil rows x focal columns).
 
     Parameters
     ----------
     residual_vector : array_like
-        Flattened residual vector,
-        length n_focal * n_pupil.
+        Flattened residual vector, length n_focal * n_pupil.
     focal_indices : list of int
     pupil_indices : list of int
     tolerance : float
         Threshold for asterisk marking.
     """
     residuals_2d = flat_to_dz_matrix(
-        residual_vector,
-        len(focal_indices),
-        len(pupil_indices),
+        residual_vector, len(focal_indices), len(pupil_indices),
     ).T  # transpose to (pupil, focal)
 
-    pw = max(
-        len(str(idx)) for idx in pupil_indices)
+    pw = max(len(str(idx)) for idx in pupil_indices)
     pw = max(pw, len("Pupil"))
-    fw = max(
-        len(str(idx)) for idx in focal_indices)
+    fw = max(len(str(idx)) for idx in focal_indices)
     fw = max(fw, 12)
 
     lines = []
@@ -972,14 +863,11 @@ def format_residuals(
     return "\n".join(lines)
 
 
-def print_residuals(
-    residual_vector, focal_indices,
-    pupil_indices, tolerance=0.01,
-):
+def print_residuals(residual_vector, focal_indices, pupil_indices,
+                    tolerance=0.01):
     """Print residuals table."""
-    print(format_residuals(
-        residual_vector, focal_indices,
-        pupil_indices, tolerance))
+    print(format_residuals(residual_vector, focal_indices, pupil_indices,
+                           tolerance))
 
 
 # =========================================================================
@@ -1138,8 +1026,7 @@ def setup_dof_figure(n_datasets):
     axes : dict  (keys: 'xyz', 'rxry', 'm1m3_bends', 'm2_bends')
     dataset_width : float
     """
-    fig = plt.figure(
-        figsize=(14, 12), constrained_layout=True)
+    fig = plt.figure(figsize=(14, 12), constrained_layout=True)
     gs = fig.add_gridspec(3, 1, hspace=0.3)
 
     # Row 0: hexapod subplots side-by-side
@@ -1149,13 +1036,7 @@ def setup_dof_figure(n_datasets):
     # a 2-col subgridspec where the second cell
     # is left empty to absorb the width difference.
     gs_m2 = gs[2].subgridspec(
-        1, 2,
-        width_ratios=[
-            N_M2_BEND,
-            N_M1M3_BEND - N_M2_BEND,
-        ],
-        wspace=0,
-    )
+        1, 2, width_ratios=[N_M2_BEND, N_M1M3_BEND - N_M2_BEND], wspace=0)
 
     axes = {
         'xyz': fig.add_subplot(gs_hex[0, 0]),
@@ -1192,7 +1073,8 @@ def setup_dof_figure(n_datasets):
         axes['rxry'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
 
     # M1M3 bending modes
-    m1m3_lbl = [l.replace("M1M3_", "") for l in DOF_LABELS[IDX_M1M3_START:IDX_M2_START]]
+    m1m3_lbl = [l.replace("M1M3_", "")
+                for l in DOF_LABELS[IDX_M1M3_START:IDX_M2_START]]
     axes['m1m3_bends'].set_xticks(range(N_M1M3_BEND))
     axes['m1m3_bends'].set_xlim(-0.5, N_M1M3_BEND - 0.5)
     axes['m1m3_bends'].set_xticklabels(m1m3_lbl)
@@ -1201,7 +1083,8 @@ def setup_dof_figure(n_datasets):
     axes['m1m3_bends'].axhline(0, color='gray', lw=0.5, ls='-')
     axes['m1m3_bends'].grid(True, axis='y', alpha=0.4)
     for i in range(0, N_M1M3_BEND, 2):
-        axes['m1m3_bends'].axvspan(i - 0.5, i + 0.5, color='k', alpha=0.07, lw=0)
+        axes['m1m3_bends'].axvspan(i - 0.5, i + 0.5,
+                                   color='k', alpha=0.07, lw=0)
 
     # M2 bending modes
     m2_lbl = [l.replace("M2_", "") for l in DOF_LABELS[IDX_M2_START:]]
@@ -1219,10 +1102,8 @@ def setup_dof_figure(n_datasets):
     return fig, axes, dataset_width
 
 
-def plot_dof_vector(ax, x_positions, values,
-                    dataset_idx, dataset_width,
-                    color, marker='o',
-                    fillstyle='full'):
+def plot_dof_vector(ax, x_positions, values, dataset_idx, dataset_width,
+                    color, marker='o', fillstyle='full'):
     """Plot DOF values at staggered x positions.
 
     Parameters
@@ -1241,12 +1122,10 @@ def plot_dof_vector(ax, x_positions, values,
     x_offset = (dataset_idx - 0.5) * dataset_width - 0.25
     x_plot = np.array(x_positions) + x_offset
     ax.plot(x_plot, values, marker=marker, color=color,
-            linestyle='none', markersize=6,
-            fillstyle=fillstyle)
+            linestyle='none', markersize=6, fillstyle=fillstyle)
 
 
-def plot_dof_datasets(x_hat_list, file_keys,
-                      dataset_colors, title,
+def plot_dof_datasets(x_hat_list, file_keys, dataset_colors, title,
                       output_path, dof_indices=None):
     """Plot multiple DOF solution vectors.
 
@@ -1271,29 +1150,19 @@ def plot_dof_datasets(x_hat_list, file_keys,
     #   → DOF [8, 9, 3, 4]
     xyz_dof_ids = [5, 6, 7, 0, 1, 2]
     rxry_dof_ids = [8, 9, 3, 4]
-    m1m3_dof_ids = list(range(
-        IDX_M1M3_START, IDX_M2_START))
-    m2_dof_ids = list(range(
-        IDX_M2_START, N_DOF))
-    dof_set = (
-        set(dof_indices)
-        if dof_indices is not None
-        else set(range(N_DOF))
-    )
+    m1m3_dof_ids = list(range(IDX_M1M3_START, IDX_M2_START))
+    m2_dof_ids = list(range(IDX_M2_START, N_DOF))
+    dof_set = set(dof_indices) if dof_indices is not None else set(range(N_DOF))
 
     for dataset_idx, (x_hat, color) in enumerate(
-        zip(x_hat_list, dataset_colors)
-    ):
+        zip(x_hat_list, dataset_colors)):
         m2_hex = x_hat[0:5]
         cam_hex = x_hat[5:N_HEX]
-        m1m3_bends = x_hat[
-            IDX_M1M3_START:IDX_M2_START]
+        m1m3_bends = x_hat[IDX_M1M3_START:IDX_M2_START]
         m2_bends = x_hat[IDX_M2_START:]
 
-        xyz_values = np.concatenate(
-            [cam_hex[0:3], m2_hex[0:3]])
-        rxry_values = (np.concatenate(
-            [cam_hex[3:5], m2_hex[3:5]]) * 3600)
+        xyz_values = np.concatenate([cam_hex[0:3], m2_hex[0:3]])
+        rxry_values = (np.concatenate([cam_hex[3:5], m2_hex[3:5]]) * 3600)
 
         groups = [
             ('xyz', xyz_dof_ids, xyz_values),
@@ -1303,22 +1172,14 @@ def plot_dof_datasets(x_hat_list, file_keys,
             ('m2_bends', m2_dof_ids, m2_bends),
         ]
         for key, dof_ids, vals in groups:
-            inc = [i for i, d
-                   in enumerate(dof_ids)
-                   if d in dof_set]
-            exc = [i for i, d
-                   in enumerate(dof_ids)
-                   if d not in dof_set]
+            inc = [i for i, d in enumerate(dof_ids) if d in dof_set]
+            exc = [i for i, d in enumerate(dof_ids) if d not in dof_set]
             if inc:
-                plot_dof_vector(
-                    axes[key], inc, vals[inc],
-                    dataset_idx, dataset_width,
-                    color)
+                plot_dof_vector(axes[key], inc, vals[inc],
+                    dataset_idx, dataset_width, color)
             if exc:
-                plot_dof_vector(
-                    axes[key], exc, vals[exc],
-                    dataset_idx, dataset_width,
-                    color, fillstyle='none')
+                plot_dof_vector(axes[key], exc, vals[exc],
+                    dataset_idx, dataset_width, color, fillstyle='none')
 
     finalize_dof_figure(fig, axes, file_keys, dataset_colors, title, output_path)
 
@@ -1382,8 +1243,7 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
     m2_rxy = sensitivity_layer[:, 3:5] / 3600.0
     cam_xyz = sensitivity_layer[:, 5:8]
     cam_rxy = sensitivity_layer[:, 8:10] / 3600.0
-    m1m3_bends = sensitivity_layer[
-        :, IDX_M1M3_START:IDX_M2_START]
+    m1m3_bends = sensitivity_layer[:, IDX_M1M3_START:IDX_M2_START]
     m2_bends = sensitivity_layer[:, IDX_M2_START:]
 
     fig, (ax_hex, ax_bends) = plt.subplots(
@@ -1407,26 +1267,19 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
     bends_data = np.concatenate([m1m3_bends, m2_bends], axis=1)
     abs_max = np.max(np.abs(bends_data))
     im_bends = ax_bends.imshow(bends_data, aspect='auto', cmap='RdBu_r',
-                               vmin=-abs_max, vmax=abs_max, interpolation='nearest')
+                               vmin=-abs_max, vmax=abs_max,
+                               interpolation='nearest')
     m1m3_bl = [l.replace("M1M3_", "")
-                for l in DOF_LABELS[
-                    IDX_M1M3_START:IDX_M2_START]]
-    m2_bl = [l.replace("M2_", "")
-             for l in DOF_LABELS[IDX_M2_START:]]
+               for l in DOF_LABELS[IDX_M1M3_START:IDX_M2_START]]
+    m2_bl = [l.replace("M2_", "") for l in DOF_LABELS[IDX_M2_START:]]
     bend_labels = m1m3_bl + m2_bl
     n_bends = N_M1M3_BEND + N_M2_BEND
     tick_positions = list(range(0, n_bends, 5))
     ax_bends.set_xticks(tick_positions)
-    ax_bends.set_xticklabels(
-        [bend_labels[i] for i in tick_positions],
+    ax_bends.set_xticklabels([bend_labels[i] for i in tick_positions],
         fontsize=10)
-    ax_bends.set_xlabel(
-        'M1M3'
-        + ' ' * 40
-        + 'M2', fontsize=11)
-    ax_bends.axvline(
-        N_M1M3_BEND - 0.5,
-        color='gray', lw=1.5, ls='--')
+    ax_bends.set_xlabel('M1M3' + ' ' * 40 + 'M2', fontsize=11)
+    ax_bends.axvline(N_M1M3_BEND - 0.5, color='gray', lw=1.5, ls='--')
 
     # Y-axis: label every pupil row, grey out excluded ones
     y_labels = []
@@ -1447,8 +1300,7 @@ def plot_sensitivity_matrix_layer(sensitivity_layer, pupil_indices, k_index,
         r'$\mu m$ or $\mu m$/arcsec', fontsize=10)
 
     fig.suptitle(f'Sensitivity Matrix for Focal Zernike $k=${k_index},'
-                 f' Norm: {norm_type}',
-                 fontsize=13, y=0.98)
+                 f' Norm: {norm_type}', fontsize=13, y=0.98)
     plt.tight_layout()
     log.info("Saving sensitivity plot to %s", output_path)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -1468,19 +1320,12 @@ def plot_all_sensitivity_layers(sensitivity_matrix, pupil_indices, n_focal,
     """
     output_dir = Path(output_dir)
     for k in range(1, n_focal):
-        output_path = (
-            output_dir
-            / f'sensitivity_k{k}{version}.png')
-        plot_sensitivity_matrix_layer(
-            sensitivity_matrix[k],
-            pupil_indices,
-            k, norm_type, output_path)
+        output_path = output_dir / f'sensitivity_k{k}{version}.png'
+        plot_sensitivity_matrix_layer(sensitivity_matrix[k],
+            pupil_indices, k, norm_type, output_path)
 
 
-def plot_v_modes(
-    Vt, singular_values, dof_indices,
-    rank, title, output_path,
-):
+def plot_v_modes(Vt, singular_values, dof_indices, rank, title, output_path):
     """Plot V-mode heatmap with singular value
     spectrum.
 
@@ -1497,8 +1342,7 @@ def plot_v_modes(
     output_path : Path
     """
     k, n_dof = Vt.shape
-    dof_labels = [DOF_LABELS[i]
-                  for i in dof_indices]
+    dof_labels = [DOF_LABELS[i] for i in dof_indices]
 
     fig, (ax_v, ax_s) = plt.subplots(
         1, 2,
@@ -1509,15 +1353,10 @@ def plot_v_modes(
 
     # --- V-mode heatmap ---
     abs_max = np.max(np.abs(Vt))
-    im = ax_v.imshow(
-        Vt, aspect='auto', cmap='RdBu_r',
-        vmin=-abs_max, vmax=abs_max,
-        interpolation='nearest',
-    )
+    im = ax_v.imshow(Vt, aspect='auto', cmap='RdBu_r',
+        vmin=-abs_max, vmax=abs_max, interpolation='nearest')
     ax_v.set_xticks(range(n_dof))
-    ax_v.set_xticklabels(
-        dof_labels, rotation=90,
-        fontsize=7)
+    ax_v.set_xticklabels(dof_labels, rotation=90, fontsize=7)
     ax_v.set_yticks(range(k))
     ax_v.set_yticklabels(range(k), fontsize=7)
     ax_v.set_xlabel('DOF', fontsize=10)
@@ -1525,35 +1364,21 @@ def plot_v_modes(
 
     # Separator between kept and null space
     if 0 < rank < k:
-        ax_v.axhline(
-            rank - 0.5, color='lime',
-            lw=2, ls='--')
+        ax_v.axhline(rank - 0.5, color='lime', lw=2, ls='--')
 
-    plt.colorbar(
-        im, ax=ax_v, fraction=0.03,
-        pad=0.02)
+    plt.colorbar(im, ax=ax_v, fraction=0.03, pad=0.02)
 
     # --- Singular value spectrum ---
-    ax_s.barh(
-        range(k), singular_values,
-        color=['steelblue'] * rank
-        + ['lightgray'] * (k - rank),
-        edgecolor='none',
+    ax_s.barh(range(k), singular_values, color=['steelblue'] * rank
+        + ['lightgray'] * (k - rank), edgecolor='none',
     )
-    ax_s.set_xlabel(
-        'Singular value', fontsize=10)
+    ax_s.set_xlabel('Singular value', fontsize=10)
     ax_s.invert_yaxis()
     if 0 < rank < k:
-        ax_s.axhline(
-            rank - 0.5, color='lime',
-            lw=2, ls='--')
+        ax_s.axhline(rank - 0.5, color='lime', lw=2, ls='--')
 
     fig.suptitle(title, fontsize=11)
     plt.tight_layout()
-    log.info(
-        "Saving V-mode plot to %s",
-        output_path)
-    plt.savefig(
-        output_path, dpi=150,
-        bbox_inches='tight')
+    log.info("Saving V-mode plot to %s", output_path)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
