@@ -710,6 +710,24 @@ def _run_body(
         fixed_y=True,
     )
 
+    # --- Save arrays ---
+    log.info("Saving arrays")
+    labels_path = output_dir / f"group_labels{ver}.txt"
+    labels_path.write_text("\n".join(rotang_labels))
+    np.save(
+        output_dir / f"dof_solution{ver}.npy",
+        np.array(dof_hat_list))
+    if not args.skip_dz:
+        np.save(
+            output_dir / f"dz_coefficients{ver}.npy",
+            np.array(dz_arr_list))
+    np.save(
+        output_dir / f"dz_reconstructed{ver}.npy",
+        np.array(rec_dz_list))
+    np.save(
+        output_dir / f"dz_residuals{ver}.npy",
+        np.array(d_dz_list))
+
     log.info("All output saved to %s", output_dir)
 
 
