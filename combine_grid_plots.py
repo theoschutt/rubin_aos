@@ -86,7 +86,7 @@ def main():
         "-o", "--output",
         default=None,
         help="Output PDF path "
-        "(default: <grid_dir>/combined.pdf)")
+        "(default: <grid_dir>/<grid_dir>_combined.pdf)")
     args = parser.parse_args()
 
     grid_dir = Path(args.grid_dir)
@@ -96,7 +96,7 @@ def main():
 
     output = (
         Path(args.output) if args.output
-        else grid_dir / "combined.pdf")
+        else grid_dir / f"{grid_dir}_combined.pdf")
 
     writer = PdfWriter()
 
