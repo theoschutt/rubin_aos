@@ -1358,7 +1358,7 @@ def plot_v_modes(Vt, singular_values, dof_indices, rank, title, output_path):
     ax_v.set_xticks(range(n_dof))
     ax_v.set_xticklabels(dof_labels, rotation=90, fontsize=7)
     ax_v.set_yticks(range(k))
-    ax_v.set_yticklabels(range(k), fontsize=7)
+    ax_v.set_yticklabels(range(1, k+1), fontsize=7)
     ax_v.set_xlabel('DOF', fontsize=10)
     ax_v.set_ylabel('V-mode index', fontsize=10)
 
