@@ -3,7 +3,7 @@
 import subprocess
 from pathlib import Path
 
-d = Path("/sdf/home/s/schutt20/u/rubin_aos/"
+d = Path("/sdf/home/s/schutt20/u/rubin_aos/sensitivity_matrix_analysis/"
          "sens_results+sim_max-k6-j28/DOF_combined")
 version = "v4"
 plot_type = "sensitivity_summary"
