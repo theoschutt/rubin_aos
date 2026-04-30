@@ -23,7 +23,7 @@ settings.json
 
 # output files
 sens_results*/
-dz_to_dof_results/
+dz_to_dof_results*/
 
 # Josh's sensitivity_matrix code
 sensitivity_matrix/
