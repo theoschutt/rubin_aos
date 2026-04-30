@@ -12,5 +12,11 @@
         ]
     },
     "rank_values": [10, 12, 14, 16, 18, 20, 22, 24],
-    "norm_schemes": ["geom_gq"]
+    "norm_schemes": ["geom_gq"],
+    "run_args": {
+        "smatrix_file": "ofc_cache/smatrix_cache.yaml",
+        "weights_file": "ofc_cache/weights_geom_gq.yaml",
+        "filter_col_name": ["rotator_angle"],
+        "filter_val": [[-60, -45, -30, -15, 0, 15, 30, 45, 60]]
+    }
 }
