@@ -427,7 +427,7 @@ def run_single(args, ofc_data=None):
             "--dataset_name is required when "
             "more than one parquet file is given")
     output_dir = (
-        Path(args.output) / dataset_basename
+        Path("dz_to_dof_results") / args.output / dataset_basename
         / version)
     output_dir.mkdir(exist_ok=True, parents=True)
 
