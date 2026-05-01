@@ -93,6 +93,9 @@ def _peek_config_path():
 
 
 def main():
+    """CLI entry point: load a JSON grid config, then invoke
+    :func:`run_dz_to_dof.main` once per (DOF set, normalization, rcond/
+    rank) combination, sharing a single OFC data load across runs."""
     # Peek at --config so we can apply its
     # run_args as parser defaults BEFORE parsing.
     # Tolerate missing file (e.g. --help) by

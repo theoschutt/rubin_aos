@@ -35,6 +35,9 @@ log = logging.getLogger("build_ofc_cache")
 
 
 def main():
+    """CLI entry point: load OFC data via the LSST stack and dump the
+    sensitivity matrix (YAML + .npy) and normalization weights (YAML)
+    into the output dir so downstream scripts can run stack-free."""
     parser = argparse.ArgumentParser(
         description="Build OFC cache files.")
     parser.add_argument(

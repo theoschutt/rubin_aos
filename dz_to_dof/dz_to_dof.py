@@ -247,6 +247,14 @@ class DZtoDOFSolver:
 # Section 1: Sensitivity Matrix
 # =========================================================================
 def load_ofc_data():
+    """Load the LSST OFC data object (sensitivity matrix + normalization
+    weights + DOF metadata) from the ts_config_mttcs MTAOS v13/ofc config.
+
+    Requires the LSST stack on the Python path (``lsst.ts.ofc``). For
+    offline downstream use, run ``build_ofc_cache.py`` once to dump the
+    needed pieces to YAML/.npy and then pass those via
+    ``--smatrix_file``/``--weights_file`` instead of calling this.
+    """
     ofc_config_dir = ('/sdf/home/s/schutt20/repos/lsst-ts/'
                       'ts_config_mttcs/MTAOS/v13/ofc')
     from lsst.ts.ofc import OFCData
@@ -259,8 +267,9 @@ def pad_ofc_array(arr, fill_value=1.0):
     etc.) to N_DOF by inserting ``fill_value`` at the B52 slot.
 
     Returns ``arr`` unchanged if already N_DOF-long.
-    Default fill is 1.0 (neutral multiplier); only affects results if B52
-    is selected, which is guarded against elsewhere.
+    Default fill is 1.0 (neutral multiplier); only affects results if
+    B52 is selected, which the CLI guards against (B52 is incompatible
+    with both ``"orig"`` and ``"geom"`` normalization).
     """
     arr = np.asarray(arr)
     if len(arr) == N_DOF:
@@ -388,7 +397,28 @@ def load_sensitivity_matrix(
 
 def renormalize_sensitivity_matrix(ofc_data, orig_smatrix, norm_type,
     dof_indices=range(N_DOF), weights_override=None):
+    """Apply per-DOF normalization to a sensitivity matrix.
 
+    Returns ``orig_smatrix @ diag(w)`` where ``w`` depends on
+    ``norm_type``:
+
+    - ``"orig"``: OFC-provided ``normalization_weights`` (per Megias+24
+      Eqs 9-11).
+    - ``"geom"``: ``sqrt(r_i / f_i)`` from :func:`get_rf_weights` (range
+      vs FWHM weights).
+    - ``None``: identity (no normalization).
+    - ``weights_override`` (if not None) takes precedence over
+      ``norm_type`` and is applied as ``diag(weights_override)``
+      directly.
+
+    The same choice must be passed to :func:`reverse_normalization` to
+    recover physical DOF units after solving.
+
+    Neither ``"orig"`` nor ``"geom"`` is valid when B52 is selected:
+    OFC's stored normalization weights and force-range data both
+    exclude B52, so its slot is filled with a 1.0 placeholder. Callers
+    must guard against (``--renorm`` + B52); the CLI does this.
+    """
     if weights_override is not None:
         nw = np.asarray(weights_override)
         norm_matrix = np.diag(nw[dof_indices])
@@ -410,8 +440,11 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
     weights_override=None):
     """Reverse normalization of DOF vector to physical units.
 
-    Must use the same norm_type and orig_smatrix that were
-    passed to renormalize_sensitivity_matrix.
+    Must use the same ``norm_type`` and ``orig_smatrix`` that were
+    passed to :func:`renormalize_sensitivity_matrix`.
+
+    Like the forward step, neither ``"orig"`` nor ``"geom"`` is valid
+    when B52 is selected; the CLI guards against this.
     """
     if weights_override is not None:
         nw = np.asarray(weights_override)
@@ -434,7 +467,27 @@ def reverse_normalization(ofc_data, dof_vector, norm_type,
     return dof_vector * norm_vector
 
 def get_rf_weights(ofc_data, sensitivity_matrix, dof_indices=range(N_DOF)):
+    """Compute per-DOF range (r_i) and FWHM (f_i) weights for ``"geom"``
+    normalization.
 
+    Range weights ``r_i`` come from OFC stroke/force-range data (rigid
+    body strokes for hex DOFs; ``force_range / 20 / max(rot_mat)`` for
+    bending modes; placeholder 1.0 for B52). FWHM weights ``f_i`` are
+    the L2 norm over all (focal, pupil) Zernike pairs of
+    ``convertZernikesToPsfWidth(sensitivity_matrix)`` for that DOF.
+
+    Returns
+    -------
+    r_i, f_i, f_i_stored : ndarray
+        Range weights, computed FWHM weights, and FWHM weights derived
+        from stored OFC ``normalization_weights`` (returned for
+        sanity-checking against the computed values).
+
+    Notes
+    -----
+    Geom normalization is not valid when B52 is selected (no
+    force-range data); callers must guard against that combination.
+    """
     from lsst.ts.ofc import BendModeToForce
     from lsst.ts.wep.utils import convertZernikesToPsfWidth
 
@@ -781,6 +834,8 @@ def print_dofs(x_hat):
 
 
 def _build_rows(group_specs, label_to_value):
+    """Build per-group ``(label, display_value, unit)`` rows for the
+    DOF formatter."""
     out = []
     for group_name, labels in group_specs:
         rows = []
@@ -798,6 +853,7 @@ def _build_rows(group_specs, label_to_value):
 
 
 def _make_block(group_name, rows, label_w, value_w, unit_w):
+    """Render one DOF group as a list of bordered text-table lines."""
     line = f"+-{'-' * label_w}-+-{'-' * value_w}-+-{'-' * unit_w}-+"
     group_line_w = len(line) - 4
 
@@ -816,6 +872,7 @@ def _make_block(group_name, rows, label_w, value_w, unit_w):
 
 
 def _flatten_blocks(grouped_blocks, label_w, value_w, unit_w):
+    """Concatenate per-group text blocks into a single list of lines."""
     lines = []
     for i, (group_name, rows) in enumerate(grouped_blocks):
         lines.extend(_make_block(group_name, rows, label_w, value_w, unit_w))

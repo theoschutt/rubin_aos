@@ -346,8 +346,7 @@ def build_parser():
                         help="Keep top-k singular values "
                         "(mutually exclusive with --rcond)")
     parser.add_argument("--smatrix_file", type=str, default=None,
-                        help="YAML spec for a custom smatrix "
-                        "(default: OFC data, padded at B52)")
+                        help="YAML spec for a custom smatrix")
     parser.add_argument("--weights_file", type=str, default=None,
                         help="YAML with precomputed norm weights "
                         "(overrides --renorm computation)")
@@ -377,6 +376,9 @@ def build_parser():
 
 
 def main():
+    """CLI entry point: parse args, load DZ parquet(s) + OFC sensitivity
+    matrix, group rows, solve DOFs per group, and emit plots and ``.npy``
+    arrays under ``dz_to_dof_results/<output>/<dataset>/<version>/``."""
     parser = build_parser()
     args = parser.parse_args()
 

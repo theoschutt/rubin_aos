@@ -77,6 +77,9 @@ def combine_two_pages(dof_pdf, resid_pdf):
 
 
 def main():
+    """CLI entry point: traverse a grid-run output directory and merge
+    the per-version DOF + DZ residual PDFs into a single bookmarked
+    PDF."""
     parser = argparse.ArgumentParser(
         description="Collate grid plots.")
     parser.add_argument(

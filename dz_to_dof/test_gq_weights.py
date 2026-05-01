@@ -142,6 +142,8 @@ def generate_fwhm_weights() -> None:
 
 
 def test_weights():
+    """Reproduce/check official ``geom_gq``-style normalization weights
+    (``range0.5_fwhm-0.15.yaml``)."""
     DEFAULT_PUPIL_INDICES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
                             15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
     DEFAULT_FOCAL_INDICES = [1, 2, 3, 4, 5, 6]
