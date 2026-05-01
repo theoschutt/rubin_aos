@@ -26,9 +26,7 @@ dz_to_dof/
 │                                     #   weights to YAML/.npy
 │                                     #   (optional, with stack)
 ├── test_dz_to_dof.py                 # pytest suite
-├── test_gq_weights.py                # cross-check geom_gq weights
-├── DZ_to_DOF.ipynb                   # exploratory inversion notebook
-├── fit_dofs_to_double_zernikes.ipynb # data-prep: visits → DZ parquet
+├── test_gq_weights.py                # reproduce geom_gq weights
 ├── grid_configs/                     # JSON grid configs
 ├── ofc_cache/                        # cached smatrix + weights
 ├── input_data/                       # input DZ parquets and
