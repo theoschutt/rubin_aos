@@ -7,11 +7,6 @@ FAM visit pairs, this code solves the linear system
 `A @ x_hat ≈ dz` (least-squares, with optional rcond / rank-truncation
 of the SVD) and produces diagnostic plots and `.npy` arrays.
 
-`ofc_cache/` is committed to the repo, so the LSST stack is **not**
-required for normal use — the solver and grid runner read the cached
-sensitivity matrix and weights directly. Only rebuilding the cache
-(`build_ofc_cache.py`) needs the stack.
-
 ---
 
 ## Layout
@@ -61,10 +56,6 @@ run_dz_to_dof.py        ──or──   run_grid.py
                             (multi-page combined PDF)
 ```
 
-`build_ofc_cache.py` is an optional one-time step to refresh
-`ofc_cache/` if OFC config changes; the cache committed in the repo
-is sufficient for normal use.
-
 ---
 
 ## Setup
@@ -72,8 +63,13 @@ is sufficient for normal use.
 Standard scientific Python deps: `numpy`, `scipy`, `matplotlib`,
 `astropy`, `pyyaml`, `pyarrow`, `pypdf` (for `combine_grid_plots.py`).
 
-The LSST stack is only needed for `build_ofc_cache.py` and
-`test_gq_weights.py`.
+The LSST stack is only needed for `build_ofc_cache.py`, `test_gq_weights.py`
+and one optional test in `test_dz_to_dof.py`. `build_ofc_cache.py` is an
+optional one-time step to refresh `ofc_cache/` if the stack OFC data change.
+
+`ofc_cache/` is committed to the repo, so the LSST stack is **not**
+required for normal use — the solver reads the cached
+sensitivity matrix and weights directly.
 
 ---
 

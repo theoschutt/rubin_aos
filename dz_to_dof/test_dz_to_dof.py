@@ -1,5 +1,7 @@
 """Tests for dz_to_dof module."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -10,11 +12,12 @@ from dz_to_dof import (
     dz_matrix_to_flat,
     flat_to_dz_matrix,
     group_by_tolerance,
+    load_smatrix_yaml,
+    load_weights_yaml,
     make_dz_column_names,
     renormalize_sensitivity_matrix,
     reverse_normalization,
     pad_ofc_array,
-    load_weights_yaml,
     solve_dof,
     DOF_LABELS,
     N_DOF,
@@ -24,6 +27,8 @@ from dz_to_dof import (
     IDX_M1M3_START,
     IDX_M2_START,
 )
+
+OFC_CACHE_DIR = Path(__file__).parent / "ofc_cache"
 
 
 def test_design_matrix_indexing():
@@ -163,124 +168,99 @@ def test_dof_structure():
 
 
 @pytest.fixture(scope="module")
-def ofc_data():
-    """Load real OFCData once for all renorm tests."""
-    from dz_to_dof import load_ofc_data
-    return load_ofc_data()
+def cached_smatrix():
+    """Full sensitivity matrix loaded from the committed cache."""
+    return load_smatrix_yaml(OFC_CACHE_DIR / "smatrix_cache.yaml")
 
 
-def test_renorm_orig_roundtrip(ofc_data):
-    """renormalize then reverse with 'orig' recovers
-    the same physical DOFs as solving unnormalized."""
+def _renorm_roundtrip(full_coef, weights, atol):
+    """Shared logic for ``orig`` / ``geom`` cached-weights roundtrip
+    tests.
+
+    Synthesizes DZ data from a known ``x_true``, solves directly and via
+    the normalized + reversed path, and checks both recover ``x_true``
+    within ``atol``. ``rcond=None`` keeps the SVD full-rank so the
+    rescaling is mathematically a no-op for the solution; a separate
+    singular-value comparison verifies the renormalization is
+    nontrivial."""
+    from dz_to_dof import slice_sensitivity_matrix
+
     n_focal, n_pupil = 6, 21
     focal_indices = list(range(1, 7))
-    pupil_indices = ([4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
-                      14, 15, 16, 17, 18, 19,
-                      22, 23, 24, 25, 26])
+    pupil_indices = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                     14, 15, 16, 17, 18, 19,
+                     22, 23, 24, 25, 26]
 
-    from dz_to_dof import (
-        load_sensitivity_matrix,
-    )
-    # Load with and without normalization
-    sliced_orig, full, _ = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices,
-        norm_type=None)
-    sliced_renorm, _, _ = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices,
-        norm_type="orig")
+    sliced_orig = slice_sensitivity_matrix(
+        full_coef, focal_indices, pupil_indices)
+    full_renorm = renormalize_sensitivity_matrix(
+        None, full_coef, None, weights_override=weights)
+    sliced_renorm = slice_sensitivity_matrix(
+        full_renorm, focal_indices, pupil_indices)
 
     A_orig = build_design_matrix(sliced_orig)
     A_renorm = build_design_matrix(sliced_renorm)
 
-    # Synthesize DZ data from known physical DOFs
-    # (B52 column is zero in OFC smatrix, so
-    # x_true[B52] is not recoverable; set it to 0)
+    # Confirm renormalization actually changes the problem
+    # conditioning (otherwise the roundtrip below is trivial).
+    sv_orig = np.linalg.svd(A_orig, compute_uv=False)
+    sv_renorm = np.linalg.svd(A_renorm, compute_uv=False)
+    assert not np.allclose(sv_orig, sv_renorm)
+
+    # B52 column is zero in OFC smatrix; not recoverable.
     rng = np.random.default_rng(42)
     x_true = rng.standard_normal(N_DOF)
     x_true[IDX_M1M3_START + N_M1M3_BEND - 1] = 0.0
     y = A_orig @ x_true
     dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
 
-    # Solve unnormalized
     x_direct, _, _, _ = solve_dof(A_orig, dz_mat, rcond=None)
-
-    # Solve normalized then reverse
     x_renorm, _, _, _ = solve_dof(A_renorm, dz_mat, rcond=None)
     x_recovered = reverse_normalization(
-        ofc_data, x_renorm, "orig")
+        None, x_renorm, None, weights_override=weights)
 
-    # 'orig' weights span ~5 decades (68 to 0.001),
-    # so the two solve paths diverge at ~1e-7.
-    np.testing.assert_allclose(
-        x_recovered, x_direct, atol=1e-6)
-    np.testing.assert_allclose(
-        x_recovered, x_true, atol=1e-6)
+    np.testing.assert_allclose(x_recovered, x_direct, atol=atol)
+    np.testing.assert_allclose(x_recovered, x_true, atol=atol)
 
 
-def test_renorm_geom_roundtrip(ofc_data):
-    """renormalize then reverse with 'geom' recovers
-    the same physical DOFs as solving unnormalized."""
-    n_focal, n_pupil = 6, 21
-    focal_indices = list(range(1, 7))
-    pupil_indices = ([4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
-                      14, 15, 16, 17, 18, 19,
-                      22, 23, 24, 25, 26])
-
-    from dz_to_dof import (
-        load_sensitivity_matrix,
-    )
-    # Load with and without normalization
-    sliced_orig, full, _ = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices,
-        norm_type=None)
-    sliced_renorm, _, _ = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices,
-        norm_type="geom")
-
-    A_orig = build_design_matrix(sliced_orig)
-    A_renorm = build_design_matrix(sliced_renorm)
-
-    # Synthesize DZ data from known physical DOFs
-    # (B52 column is zero in OFC smatrix, so
-    # x_true[B52] is not recoverable; set it to 0)
-    rng = np.random.default_rng(42)
-    x_true = rng.standard_normal(N_DOF)
-    x_true[IDX_M1M3_START + N_M1M3_BEND - 1] = 0.0
-    y = A_orig @ x_true
-    dz_mat = flat_to_dz_matrix(y, n_focal, n_pupil)
-
-    # Solve unnormalized
-    x_direct, _, _, _ = solve_dof(A_orig, dz_mat, rcond=None)
-
-    # Solve normalized then reverse
-    x_renorm, _, _, _ = solve_dof(A_renorm, dz_mat, rcond=None)
-    x_recovered = reverse_normalization(
-        ofc_data, x_renorm, "geom", full)
-
-    np.testing.assert_allclose(
-        x_recovered, x_direct, atol=1e-10)
-    np.testing.assert_allclose(
-        x_recovered, x_true, atol=1e-10)
+def test_renorm_orig_roundtrip(cached_smatrix):
+    """renormalize then reverse with cached 'orig' weights recovers the
+    same physical DOFs as solving unnormalized."""
+    weights = load_weights_yaml(OFC_CACHE_DIR / "weights_orig.yaml")
+    _renorm_roundtrip(cached_smatrix, weights, atol=1e-6)
 
 
-def test_renorm_none_is_identity(ofc_data):
-    """norm_type=None leaves smatrix unchanged."""
-    focal_indices = list(range(1, 7))
-    pupil_indices = [4, 5, 6, 7, 8, 9]
+def test_renorm_geom_roundtrip(cached_smatrix):
+    """renormalize then reverse with cached 'geom' weights recovers the
+    same physical DOFs as solving unnormalized."""
+    weights = load_weights_yaml(OFC_CACHE_DIR / "weights_geom.yaml")
+    _renorm_roundtrip(cached_smatrix, weights, atol=1e-10)
 
-    from dz_to_dof import load_sensitivity_matrix
-    sliced_none, full, _ = load_sensitivity_matrix(
-        ofc_data, focal_indices, pupil_indices,
-        norm_type=None)
 
+def test_renorm_none_is_identity(cached_smatrix):
+    """norm_type=None leaves smatrix unchanged (no ofc_data needed)."""
     renormed = renormalize_sensitivity_matrix(
-        ofc_data, full, None)
-    np.testing.assert_array_equal(full, renormed)
+        None, cached_smatrix, None)
+    np.testing.assert_array_equal(cached_smatrix, renormed)
 
     x = np.ones(N_DOF)
-    x_back = reverse_normalization(
-        ofc_data, x, None)
+    x_back = reverse_normalization(None, x, None)
     np.testing.assert_array_equal(x, x_back)
+
+
+def test_cached_smatrix_matches_ofc(cached_smatrix):
+    """Optional check that the committed ofc_cache smatrix matches a
+    fresh load from the LSST stack. Skipped if the stack is not on the
+    PYTHONPATH (the rest of the suite runs cache-free)."""
+    pytest.importorskip("lsst.ts.ofc")
+    pytest.importorskip("galsim")
+
+    from dz_to_dof import load_ofc_data, load_sensitivity_matrix
+    ofc_data = load_ofc_data()
+    # focal/pupil indices are arbitrary here; we only inspect full_coef.
+    _, full_from_ofc, _ = load_sensitivity_matrix(
+        ofc_data, [1], [4], norm_type=None)
+    np.testing.assert_array_equal(full_from_ofc, cached_smatrix)
 
 
 # ---- DZtoDOFSolver tests (synthetic data) ----
