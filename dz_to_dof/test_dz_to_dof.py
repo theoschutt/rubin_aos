@@ -11,7 +11,6 @@ from dz_to_dof import (
     columns_to_dz_matrix,
     dz_matrix_to_flat,
     flat_to_dz_matrix,
-    group_by_tolerance,
     load_smatrix_yaml,
     load_weights_yaml,
     make_dz_column_names,
@@ -27,6 +26,8 @@ from dz_to_dof import (
     IDX_M1M3_START,
     IDX_M2_START,
 )
+
+from run_dz_to_dof import group_by_tolerance
 
 OFC_CACHE_DIR = Path(__file__).parent / "ofc_cache"
 

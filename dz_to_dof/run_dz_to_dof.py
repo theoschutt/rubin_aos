@@ -36,9 +36,7 @@ from dz_to_dof import (
     load_smatrix_yaml,
     load_weights_yaml,
     make_dz_column_names,
-    median_per_group,
     dz_matrix_to_flat,
-    assign_groups,
     format_dofs,
     format_residuals,
     plot_all_sensitivity_layers,
@@ -221,6 +219,83 @@ def group_by_column_vals(dz_tab, column_names, tolerance=1.0):
         log.debug("  %s: %d observations", labels[i], len(g))
 
     return groups, labels
+
+
+def group_by_tolerance(values, tolerance=1.0):
+    """Group values via single-linkage clustering: break groups where adjacent
+    sorted values differ by more than ``tolerance``.
+
+    This chains through near-by values (so [-45.3, -44.9, -44.5] is one group
+    at tolerance=1), and is order-independent.
+
+    Parameters
+    ----------
+    values : array_like
+    tolerance : float
+
+    Returns
+    -------
+    list of list of int
+        Each inner list contains indices of values in one group.
+    """
+    values = np.asarray(values)
+    n = len(values)
+    if n == 0:
+        return []
+    order = np.argsort(values)
+    breaks = np.diff(values[order]) > tolerance
+    group_ids = np.concatenate(([0], np.cumsum(breaks)))
+    groups = []
+    for gid in range(int(group_ids[-1]) + 1):
+        mask = group_ids == gid
+        groups.append(order[mask].tolist())
+    return groups
+
+
+def assign_groups(values, tolerance=1.0):
+    """Return an integer group label for each value.
+
+    Parameters
+    ----------
+    values : array_like
+    tolerance : float
+
+    Returns
+    -------
+    ndarray of int
+    """
+    groups = group_by_tolerance(values, tolerance)
+    labels = np.zeros(len(values), dtype=int)
+    for group_id, indices in enumerate(groups):
+        labels[indices] = group_id
+    return labels
+
+
+def median_per_group(table, column_names, group_idx_list, n_focal, n_pupil):
+    """Compute median DZ coefficients per group as (n_focal, n_pupil) matrices.
+
+    Parameters
+    ----------
+    table : table-like
+        Must support ``table[col_name][indices]`` indexing.
+    column_names : list of str
+        DZ column names in (pupil-outer, focal-inner) order.
+        Use ``make_dz_column_names()`` to generate these.
+    group_idx_list : list of array_like
+        Each entry is a list/array of row indices forming one group.
+    n_focal, n_pupil : int
+
+    Returns
+    -------
+    list of ndarray
+        One (n_focal, n_pupil) matrix per group.
+    """
+    result = []
+    for group_idxs in group_idx_list:
+        medians = [np.median(np.asarray(table[col])[group_idxs])
+                   for col in column_names]
+        result.append(columns_to_dz_matrix(medians, n_focal, n_pupil))
+    return result
 
 
 def compact_index_str(indices):
