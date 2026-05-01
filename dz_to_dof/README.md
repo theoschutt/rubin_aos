@@ -141,6 +141,8 @@ A grid config JSON may set:
 - `rcond_values`: list of rcond floats
 - `rank_values`: list of rank ints (mutually exclusive with rcond)
 - `norm_schemes`: list of `null` / `"orig"` / `"geom"` / `"geom_gq"`
+  - Note that if a weights YAML file is specified, this field only gets used
+  as a label for plots.
 - `run_args`: dict of default CLI args applied to every run (CLI
   flags override these)
 
@@ -222,8 +224,7 @@ defaults that the CLI can override.
   - `10-29`: M1M3 bending modes B1-B20
   - `30`: M1M3_B52 (slot reserved for future compatibility, padded)
   - `31-50`: M2 bending modes B1-B20
-  - The default `--dof_indices` skips index 30 because OFC has no
-    normalization weights or force-range data for B52.
+  - The default `--dof_indices` skips index 30.
   - **Both `--renorm orig` and `--renorm geom` are invalid when B52
     is selected.** `run_dz_to_dof.py` raises a `ValueError` if
     `--renorm` is set with `30` in `--dof_indices`.
@@ -231,9 +232,6 @@ defaults that the CLI can override.
 - **Sensitivity matrix shape**: `sens[k, j, dof]` with `k` = focal
   Zernike, `j` = pupil Zernike. Parquet column names are
   `z1toz6_z{j}_c{k}` — pupil index outer, focal index inner.
-
-- **Design matrix**: C-order flatten `(n_focal, n_pupil, n_dof)` →
-  `A[k * n_pupil + j_idx, dof]`; k slow, j fast.
 
 - **Angle units**: in the parquet, `alt` is in **radians**; on the
   CLI (`--filter_val`, group output labels) it is in **degrees**.
