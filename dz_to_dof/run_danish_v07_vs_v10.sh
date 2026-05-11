@@ -15,7 +15,7 @@ V10_PARQUET=input_data/aos_fam_danish_v1_triplets_20260315_20260409_fits.parquet
 
 V07_OUT=danish_v0.7_rot0
 V10_OUT=danish_v1.0_rot0
-INTERLEAVED=dz_to_dof_results/danish_0.7-vs-1.0_rot0_v1_interleaved_vtest.pdf
+INTERLEAVED=dz_to_dof_results/danish_0.7-vs-1.0_rot0_interleaved_vtest.pdf
 
 CONFIGS=(grid_config_22-24dof grid_config_50dof)
 
@@ -37,9 +37,9 @@ V07_COMBINED="dz_to_dof_results/$V07_OUT/${V07_OUT}_combined.pdf"
 V10_COMBINED="dz_to_dof_results/$V10_OUT/${V10_OUT}_combined.pdf"
 
 python combine_grid_plots.py \
-    "dz_to_dof_results/$V07_OUT/$V07_DATASET" -o "$V07_COMBINED"
+    "dz_to_dof_results/$V07_OUT" -o "$V07_COMBINED"
 python combine_grid_plots.py \
-    "dz_to_dof_results/$V10_OUT/$V10_DATASET" -o "$V10_COMBINED"
+    "dz_to_dof_results/$V10_OUT" -o "$V10_COMBINED"
 
 python interleave.py \
     "$V07_COMBINED" "$V10_COMBINED" "$INTERLEAVED" \
