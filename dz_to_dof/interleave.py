@@ -3,6 +3,7 @@ import argparse
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.annotations import FreeText
+from pypdf.generic import BooleanObject, NameObject, DictionaryObject
 
 
 def main():
@@ -15,6 +16,9 @@ def main():
     args = p.parse_args()
 
     writer = PdfWriter()
+    writer._root_object[NameObject("/AcroForm")] = DictionaryObject({
+    NameObject("/NeedAppearances"): BooleanObject(True)
+})
     pdf1 = PdfReader(args.pdf1)
     pdf2 = PdfReader(args.pdf2)
 
@@ -24,7 +28,7 @@ def main():
             page_number=-1,
             annotation=FreeText(
                 text=args.label1,
-                rect=(1970, 890, 2000, 920),
+                rect=(1970, 890, 2070, 940),
                 font_size="30pt",
             ),
         )
@@ -33,7 +37,7 @@ def main():
             page_number=-1,
             annotation=FreeText(
                 text=args.label2,
-                rect=(1970, 890, 2000, 920),
+                rect=(1970, 890, 2070, 940),
                 font_size="30pt",
             ),
         )
