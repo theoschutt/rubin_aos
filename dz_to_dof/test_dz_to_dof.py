@@ -459,17 +459,14 @@ def test_solver_rank_equals_full():
         atol=1e-8)
 
 
-def test_solver_rank_caps_at_min_mn():
-    """Requesting rank > min(m, n) is silently
-    capped to min(m, n)."""
+def test_solver_rank_exceeds_min_mn_raises():
+    """Requesting rank > min(m, n) raises ValueError instead of
+    silently capping."""
     rng = np.random.default_rng(3)
     A = rng.standard_normal((30, 10))
     k_max = min(A.shape)
-    solver = DZtoDOFSolver._from_components(
-        A, 6, 5, rank=k_max + 50)
-    dz_mat = rng.standard_normal((6, 5))
-    result = solver.solve(dz_mat)
-    assert result["rank"] == k_max
+    with pytest.raises(ValueError, match="exceeds"):
+        DZtoDOFSolver._from_components(A, 6, 5, rank=k_max + 50)
 
 
 def test_load_weights_yaml_flat_list(tmp_path):

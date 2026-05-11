@@ -122,6 +122,12 @@ class DZtoDOFSolver:
         sliced_subset = sliced[:, :, self.dof_indices]
         self.A = build_design_matrix(sliced_subset)
 
+        if rank is not None and rank > min(self.A.shape):
+            raise ValueError(
+                f"rank={rank} exceeds min(A.shape)={min(self.A.shape)} "
+                f"(n_dof={len(self.dof_indices)}, "
+                f"n_focal*n_pupil={self.n_focal * self.n_pupil})")
+
     def solve(self, dz_matrix):
         """Solve for DOFs from a DZ matrix.
 
@@ -180,7 +186,7 @@ class DZtoDOFSolver:
         then applies it to y.
         """
         U, s, Vt = self.svd()
-        k = min(self.rank, len(s))
+        k = self.rank
         y = dz_matrix_to_flat(dz_matrix)
         x_sub = Vt[:k].T @ ((U[:, :k].T @ y) / s[:k])
         return x_sub, k, s
@@ -204,7 +210,7 @@ class DZtoDOFSolver:
         """Number of singular values kept (rcond or rank mode)."""
         _, s, _ = self.svd()
         if self.rank is not None:
-            return min(self.rank, len(s))
+            return self.rank
         threshold = self.rcond * s[0]
         return int(np.sum(s > threshold))
 
@@ -240,6 +246,9 @@ class DZtoDOFSolver:
         solver.sliced_smatrix = None
         solver.pupil_indices = []
         solver.focal_indices = []
+        if rank is not None and rank > min(A.shape):
+            raise ValueError(
+                f"rank={rank} exceeds min(A.shape)={min(A.shape)}")
         return solver
 
 
