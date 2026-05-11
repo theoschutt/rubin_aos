@@ -35,6 +35,7 @@ import argparse
 import copy
 import json
 import logging
+import sys
 
 import run_dz_to_dof
 from dz_to_dof import load_ofc_data
@@ -122,8 +123,24 @@ def main():
         "--dry-run", action="store_true",
         help="Print config without running")
     # Apply run_args from config as defaults
-    # (CLI-specified values still win).
+    # (CLI-specified values still win).  For action='append' args
+    # argparse would otherwise extend the config default with the CLI
+    # value rather than replace it; drop those defaults when the CLI
+    # provides the same arg so it cleanly overrides.
     if run_defaults:
+        append_dest_by_opt = {
+            opt: action.dest
+            for action in parser._actions
+            if isinstance(action, argparse._AppendAction)
+            for opt in action.option_strings
+        }
+        cli_append_dests = {
+            append_dest_by_opt[tok.split("=", 1)[0]]
+            for tok in sys.argv[1:]
+            if tok.split("=", 1)[0] in append_dest_by_opt
+        }
+        for dest in cli_append_dests:
+            run_defaults.pop(dest, None)
         parser.set_defaults(**run_defaults)
 
     args = parser.parse_args()
