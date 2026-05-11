@@ -36,6 +36,7 @@ from dz_to_dof import (
     load_smatrix_yaml,
     load_weights_yaml,
     make_dz_column_names,
+    columns_to_dz_matrix,
     dz_matrix_to_flat,
     format_dofs,
     format_residuals,
